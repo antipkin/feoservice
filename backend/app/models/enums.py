@@ -6,6 +6,11 @@ class ObjectType(str, enum.Enum):
     PARKING = "PARKING"   # Паркинг
 
 
+class TariffBase(str, enum.Enum):
+    AREA = "area"         # Тариф считается на м² площади
+    SPACES = "spaces"     # Тариф считается на машиноместо
+
+
 class ResourceType(str, enum.Enum):
     MATERIAL = "material"
     LABOR = "labor"

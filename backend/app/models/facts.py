@@ -25,7 +25,6 @@ class FactHeader(Base):
     approved_by = Column(Integer)
     approved_at = Column(DateTime(timezone=True))
 
-    # Relationships
     object = relationship("Object", back_populates="fact_headers")
     items = relationship(
         "FactItem", back_populates="fact_header", cascade="all, delete-orphan"
@@ -53,13 +52,12 @@ class FactItem(Base):
     )
     actual_quantity = Column(Numeric(15, 4), nullable=False)
     unit_price = Column(Numeric(15, 4), nullable=False)
-    actual_amount = Column(Numeric(15, 2))  # = quantity * unit_price
+    actual_amount = Column(Numeric(15, 2))
     executed_at = Column(Date)
     executor = Column(String(200))
     notes = Column(Text)
-    attachments = Column(JSONB)  # Массив файлов
+    attachments = Column(JSONB)
 
-    # Relationships
     fact_header = relationship("FactHeader", back_populates="items")
     plan_item = relationship("PlanItem", back_populates="fact_items")
     service_type = relationship("ServiceType", back_populates="fact_items")
@@ -69,7 +67,6 @@ class FactItem(Base):
 
 
 class FactResource(Base):
-    """Фактический расход ресурсов."""
     __tablename__ = "fact_resources"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -83,7 +80,6 @@ class FactResource(Base):
     unit_price = Column(Numeric(15, 4))
     total_amount = Column(Numeric(15, 2))
 
-    # Relationships
     fact_item = relationship("FactItem", back_populates="resources")
     resource = relationship("Resource", back_populates="fact_resources")
 
@@ -102,7 +98,6 @@ class Act(Base):
     pdf_url = Column(String(500))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Relationships
     fact_header = relationship("FactHeader", back_populates="act")
     items = relationship("ActItem", back_populates="act", cascade="all, delete-orphan")
 
@@ -117,9 +112,10 @@ class ActItem(Base):
     service_type_id = Column(
         Integer, ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False
     )
+    # 🆕 Периодичность выполнения (копируется из ServiceType при формировании акта)
+    frequency = Column(String(100), nullable=True)
     quantity = Column(Numeric(15, 4))
     unit_price = Column(Numeric(15, 4))
     total_amount = Column(Numeric(15, 2))
 
-    # Relationships
     act = relationship("Act", back_populates="items")

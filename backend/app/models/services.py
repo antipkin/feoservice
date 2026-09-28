@@ -12,12 +12,14 @@ class ServiceType(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     code = Column(String(50), unique=True, nullable=False)
     name = Column(String(500), nullable=False)
-    unit = Column(String(50), nullable=False)       # м², шт, пог.м
-    category = Column(String(100))
+    unit_id = Column(Integer, ForeignKey("units.id", ondelete="RESTRICT"), nullable=False)
+    category_id = Column(Integer, ForeignKey("service_categories.id", ondelete="RESTRICT"), nullable=False)
+    frequency = Column(String(100), nullable=True)
     description = Column(String(2000))
     is_active = Column(Boolean, default=True, nullable=False)
 
-    # Relationships
+    unit = relationship("Unit")
+    category = relationship("ServiceCategory")
     rates = relationship("ServiceRate", back_populates="service_type", cascade="all, delete-orphan")
     norms = relationship("ResourceNorm", back_populates="service_type", cascade="all, delete-orphan")
     plan_items = relationship("PlanItem", back_populates="service_type")
@@ -25,23 +27,22 @@ class ServiceType(Base):
 
 
 class ServiceRate(Base):
-    """Расценка на услугу (с историей изменений)."""
     __tablename__ = "service_rates"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    service_type_id = Column(
-        Integer, ForeignKey("service_types.id", ondelete="CASCADE"), nullable=False
-    )
+    # 🆕 Привязка к объекту (nullable=True для обратной совместимости, но UI будет требовать)
+    object_id = Column(Integer, ForeignKey("objects.id", ondelete="CASCADE"), nullable=True)
+    service_type_id = Column(Integer, ForeignKey("service_types.id", ondelete="CASCADE"), nullable=False)
     price_per_unit = Column(Numeric(15, 4), nullable=False)
     valid_from = Column(Date, nullable=False)
     valid_to = Column(Date)
 
-    # Relationships
     service_type = relationship("ServiceType", back_populates="rates")
+    object = relationship("Object")
 
     __table_args__ = (
-        UniqueConstraint("service_type_id", "valid_from", name="uq_service_rate_period"),
-        Index("ix_service_rates_valid", "service_type_id", "valid_from"),
+        UniqueConstraint("object_id", "service_type_id", "valid_from", name="uq_service_rate_period"),
+        Index("ix_service_rates_valid", "object_id", "service_type_id", "valid_from"),
     )
 
 
@@ -52,10 +53,9 @@ class Resource(Base):
     code = Column(String(50), unique=True, nullable=False)
     name = Column(String(500), nullable=False)
     unit = Column(String(50), nullable=False)
-    resource_type = Column(String(50), nullable=False)  # material/labor/equipment
+    resource_type = Column(String(50), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
 
-    # Relationships
     rates = relationship("ResourceRate", back_populates="resource", cascade="all, delete-orphan")
     norms = relationship("ResourceNorm", back_populates="resource", cascade="all, delete-orphan")
     plan_resources = relationship("PlanResource", back_populates="resource")
@@ -63,18 +63,14 @@ class Resource(Base):
 
 
 class ResourceRate(Base):
-    """Расценка на ресурс (с историей)."""
     __tablename__ = "resource_rates"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    resource_id = Column(
-        Integer, ForeignKey("resources.id", ondelete="CASCADE"), nullable=False
-    )
+    resource_id = Column(Integer, ForeignKey("resources.id", ondelete="CASCADE"), nullable=False)
     price_per_unit = Column(Numeric(15, 4), nullable=False)
     valid_from = Column(Date, nullable=False)
     valid_to = Column(Date)
 
-    # Relationships
     resource = relationship("Resource", back_populates="rates")
 
     __table_args__ = (
@@ -83,28 +79,19 @@ class ResourceRate(Base):
 
 
 class ResourceNorm(Base):
-    """Норматив расхода ресурса на 1 ед. услуги."""
     __tablename__ = "resource_norms"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    service_type_id = Column(
-        Integer, ForeignKey("service_types.id", ondelete="CASCADE"), nullable=False
-    )
-    resource_id = Column(
-        Integer, ForeignKey("resources.id", ondelete="CASCADE"), nullable=False
-    )
+    service_type_id = Column(Integer, ForeignKey("service_types.id", ondelete="CASCADE"), nullable=False)
+    resource_id = Column(Integer, ForeignKey("resources.id", ondelete="CASCADE"), nullable=False)
     quantity_per_unit = Column(Numeric(15, 6), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     valid_from = Column(Date, nullable=False)
     valid_to = Column(Date)
 
-    # Relationships
     service_type = relationship("ServiceType", back_populates="norms")
     resource = relationship("Resource", back_populates="norms")
 
     __table_args__ = (
-        UniqueConstraint(
-            "service_type_id", "resource_id", "valid_from",
-            name="uq_resource_norm_period"
-        ),
+        UniqueConstraint("service_type_id", "resource_id", "valid_from", name="uq_resource_norm_period"),
     )
