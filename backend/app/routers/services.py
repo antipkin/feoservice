@@ -1,3 +1,4 @@
+# backend/app/routers/services.py
 import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -18,6 +19,7 @@ from app.utils.export import export_rates_to_excel, export_rates_to_pdf
 
 router = APIRouter(prefix="/services", tags=["Справочники: Услуги и расценки"])
 
+
 # ============================================================
 # SERVICE TYPES (Услуги)
 # ============================================================
@@ -31,34 +33,59 @@ async def get_service_types(db: AsyncSession = Depends(get_db)):
     )
     return result.scalars().all()
 
+
 @router.post("/types", response_model=ServiceTypeResponse, status_code=status.HTTP_201_CREATED)
 async def create_service_type(item: ServiceTypeCreate, db: AsyncSession = Depends(get_db)):
+    # Проверка уникальности кода
+    existing = await db.execute(select(ServiceType).where(ServiceType.code == item.code))
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Услуга с кодом '{item.code}' уже существует. Придумайте другой код."
+        )
+    
     db_item = ServiceType(**item.model_dump())
     db.add(db_item)
     await db.commit()
-    await db.refresh(db_item)
+    await db.refresh(db_item, attribute_names=['unit', 'category'])
     return db_item
+
 
 @router.patch("/types/{item_id}", response_model=ServiceTypeResponse)
 async def update_service_type(item_id: int, item_in: ServiceTypeUpdate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ServiceType).where(ServiceType.id == item_id))
     item = result.scalar_one_or_none()
-    if not item: raise HTTPException(status_code=404, detail="Услуга не найдена")
+    if not item: 
+        raise HTTPException(status_code=404, detail="Услуга не найдена")
+    
+    # Проверка уникальности кода при обновлении
+    if item_in.code and item_in.code != item.code:
+        existing = await db.execute(select(ServiceType).where(ServiceType.code == item_in.code))
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Код '{item_in.code}' уже используется другой услугой."
+            )
     
     for field, value in item_in.model_dump(exclude_unset=True).items():
         setattr(item, field, value)
+    
     await db.commit()
-    await db.refresh(item)
+    await db.refresh(item, attribute_names=['unit', 'category'])
     return item
+
 
 @router.delete("/types/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_service_type(item_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ServiceType).where(ServiceType.id == item_id))
     item = result.scalar_one_or_none()
-    if not item: raise HTTPException(status_code=404, detail="Услуга не найдена")
+    if not item: 
+        raise HTTPException(status_code=404, detail="Услуга не найдена")
+    
     await db.delete(item)
     await db.commit()
     return None
+
 
 # ============================================================
 # SERVICE RATES (Расценки)
@@ -96,24 +123,17 @@ async def get_service_rates(
         ))
     return response
 
+
 @router.post("/rates", response_model=ServiceRateResponse, status_code=status.HTTP_201_CREATED)
 async def create_service_rate(item: ServiceRateCreate, db: AsyncSession = Depends(get_db)):
-    # 🎯 ИСПРАВЛЕННАЯ ПРОВЕРКА НА ПЕРЕСЕЧЕНИЕ ПЕРИОДОВ (учитывает None для valid_to)
-    # Два периода [start1, end1] и [start2, end2] пересекаются, если:
-    # start1 <= end2 (или end2 is None) AND start2 <= end1 (или end1 is None)
-    
+    # Проверка на пересечение периодов
     if item.valid_to is None:
-        # Новая расценка бессрочная. Пересекается с любой существующей, которая:
-        # заканчивается после начала новой ИЛИ тоже бессрочная
         overlap_filter = and_(
             ServiceRate.object_id == item.object_id,
             ServiceRate.service_type_id == item.service_type_id,
             or_(ServiceRate.valid_to >= item.valid_from, ServiceRate.valid_to.is_(None))
         )
     else:
-        # Новая расценка имеет конец. Пересекается, если:
-        # (существующая заканчивается после начала новой ИЛИ бессрочная)
-        # AND (новая заканчивается после начала существующей)
         overlap_filter = and_(
             ServiceRate.object_id == item.object_id,
             ServiceRate.service_type_id == item.service_type_id,
@@ -139,15 +159,16 @@ async def create_service_rate(item: ServiceRateCreate, db: AsyncSession = Depend
         service_name=db_item.service_type.name, object_name=db_item.object.name if db_item.object else "Глобальная"
     )
 
+
 @router.patch("/rates/{rate_id}", response_model=ServiceRateResponse)
 async def update_service_rate(rate_id: int, item_in: ServiceRateUpdate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ServiceRate).where(ServiceRate.id == rate_id))
     item = result.scalar_one_or_none()
-    if not item: raise HTTPException(status_code=404, detail="Расценка не найдена")
+    if not item: 
+        raise HTTPException(status_code=404, detail="Расценка не найдена")
     
     update_data = item_in.model_dump(exclude_unset=True)
     
-    # Если меняем даты, нужно проверить пересечение с ДРУГИМИ расценками
     if 'valid_from' in update_data or 'valid_to' in update_data:
         check_from = update_data.get('valid_from', item.valid_from)
         check_to = update_data.get('valid_to', item.valid_to)
@@ -156,7 +177,7 @@ async def update_service_rate(rate_id: int, item_in: ServiceRateUpdate, db: Asyn
             overlap_filter = and_(
                 ServiceRate.object_id == item.object_id,
                 ServiceRate.service_type_id == item.service_type_id,
-                ServiceRate.id != rate_id, # Исключаем текущую расценку
+                ServiceRate.id != rate_id,
                 or_(ServiceRate.valid_to >= check_from, ServiceRate.valid_to.is_(None))
             )
         else:
@@ -177,7 +198,7 @@ async def update_service_rate(rate_id: int, item_in: ServiceRateUpdate, db: Asyn
 
     for field, value in update_data.items():
         setattr(item, field, value)
-        
+    
     await db.commit()
     await db.refresh(item, attribute_names=['service_type', 'object'])
     
@@ -187,6 +208,7 @@ async def update_service_rate(rate_id: int, item_in: ServiceRateUpdate, db: Asyn
         service_name=item.service_type.name, object_name=item.object.name if item.object else "Глобальная"
     )
 
+
 @router.delete("/rates/{rate_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_service_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -194,9 +216,9 @@ async def delete_service_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
         .where(ServiceRate.id == rate_id)
     )
     rate = result.scalar_one_or_none()
-    if not rate: raise HTTPException(status_code=404, detail="Расценка не найдена")
+    if not rate: 
+        raise HTTPException(status_code=404, detail="Расценка не найдена")
 
-    # ПРОВЕРКА: используется ли расценка в планах или актах
     plan_check = await db.execute(
         select(PlanItem.id)
         .join(PlanHeader, PlanItem.plan_header_id == PlanHeader.id)
@@ -225,6 +247,7 @@ async def delete_service_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
     await db.delete(rate)
     await db.commit()
     return None
+
 
 # ============================================================
 # ЭКСПОРТ РАСЦЕНОК
@@ -265,6 +288,7 @@ async def export_rates_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}"}
     )
+
 
 @router.get("/rates/export/pdf")
 async def export_rates_pdf(

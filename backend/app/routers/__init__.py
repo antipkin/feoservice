@@ -8,6 +8,8 @@ from . import facts
 from . import acts
 from . import dashboard
 from . import reports
+from . import pricing_settings
+from . import cost_analysis
 
 __all__ = [
     "objects",
@@ -20,4 +22,6 @@ __all__ = [
     "acts",
     "dashboard",
     "reports",
+    "pricing_settings",
+    "cost_analysis",
 ]

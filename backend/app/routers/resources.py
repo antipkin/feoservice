@@ -1,223 +1,351 @@
+# backend/app/routers/resources.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, or_, and_
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
+from datetime import date
 
 from app.db.database import get_db
 from app.models.services import Resource, ResourceRate, ResourceNorm, ServiceType
 from app.schemas.resource import (
-    ResourceCreate,
-    ResourceUpdate,
-    ResourceResponse,
-    ResourceRateCreate,
-    ResourceRateResponse,
-    ResourceNormCreate,
-    ResourceNormResponse,
-    ResourceNormUpdate,
+    ResourceCreate, ResourceUpdate, ResourceResponse,
+    ResourceRateCreate, ResourceRateUpdate, ResourceRateResponse,
+    ResourceNormCreate, ResourceNormUpdate, ResourceNormResponse,
 )
 
-router = APIRouter(prefix="/resources", tags=["Справочники: Ресурсы"])
+router = APIRouter(prefix="/resources", tags=["Ресурсы"])
 
 
-# =============================================
-# Resources (Ресурсы)
-# =============================================
-
-@router.post("/", response_model=ResourceResponse, status_code=status.HTTP_201_CREATED)
-async def create_resource(item: ResourceCreate, db: AsyncSession = Depends(get_db)):
-    existing = await db.execute(select(Resource).where(Resource.code == item.code))
-    if existing.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Ресурс с кодом '{item.code}' уже существует",
-        )
-    db_item = Resource(**item.model_dump())
-    db.add(db_item)
-    await db.commit()
-    await db.refresh(db_item)
-    return db_item
-
-
+# ============================================================
+# RESOURCES (Ресурсы)
+# ============================================================
 @router.get("/", response_model=List[ResourceResponse])
 async def get_resources(
-    skip: int = 0,
-    limit: int = 100,
-    active_only: bool = False,
-    db: AsyncSession = Depends(get_db),
+    resource_type: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
 ):
-    query = select(Resource)
-    if active_only:
-        query = query.where(Resource.is_active == True)
-    query = query.offset(skip).limit(limit)
+    """Получить все ресурсы с фильтрацией по типу."""
+    query = select(Resource).where(Resource.is_active == True)
+    if resource_type:
+        query = query.where(Resource.resource_type == resource_type)
+    query = query.order_by(Resource.name)
+    
     result = await db.execute(query)
     return result.scalars().all()
 
 
-@router.get("/{resource_id}", response_model=ResourceResponse)
-async def get_resource(resource_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Resource).where(Resource.id == resource_id))
-    item = result.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="Ресурс не найден")
-    return item
+@router.post("/", response_model=ResourceResponse, status_code=status.HTTP_201_CREATED)
+async def create_resource(resource_in: ResourceCreate, db: AsyncSession = Depends(get_db)):
+    """Создать новый ресурс."""
+    # Проверка уникальности кода
+    existing = await db.execute(select(Resource).where(Resource.code == resource_in.code))
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ресурс с кодом '{resource_in.code}' уже существует"
+        )
+    
+    db_resource = Resource(**resource_in.model_dump())
+    db.add(db_resource)
+    await db.commit()
+    await db.refresh(db_resource)
+    return db_resource
 
 
 @router.patch("/{resource_id}", response_model=ResourceResponse)
 async def update_resource(
-    resource_id: int, item_in: ResourceUpdate, db: AsyncSession = Depends(get_db)
+    resource_id: int,
+    resource_in: ResourceUpdate,
+    db: AsyncSession = Depends(get_db)
 ):
+    """Обновить ресурс."""
     result = await db.execute(select(Resource).where(Resource.id == resource_id))
-    item = result.scalar_one_or_none()
-    if not item:
+    resource = result.scalar_one_or_none()
+    if not resource:
         raise HTTPException(status_code=404, detail="Ресурс не найден")
-
-    update_data = item_in.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(item, field, value)
-
+    
+    # Если меняется код, проверяем уникальность
+    if resource_in.code and resource_in.code != resource.code:
+        existing = await db.execute(select(Resource).where(Resource.code == resource_in.code))
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Код '{resource_in.code}' уже используется"
+            )
+    
+    for field, value in resource_in.model_dump(exclude_unset=True).items():
+        setattr(resource, field, value)
+    
     await db.commit()
-    await db.refresh(item)
-    return item
+    await db.refresh(resource)
+    return resource
 
 
 @router.delete("/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_resource(resource_id: int, db: AsyncSession = Depends(get_db)):
+    """Удалить ресурс (только если не используется в нормативах)."""
     result = await db.execute(select(Resource).where(Resource.id == resource_id))
-    item = result.scalar_one_or_none()
-    if not item:
+    resource = result.scalar_one_or_none()
+    if not resource:
         raise HTTPException(status_code=404, detail="Ресурс не найден")
-    await db.delete(item)
+    
+    # Проверка использования в нормативах
+    usage_count = await db.execute(
+        select(func.count(ResourceNorm.id)).where(ResourceNorm.resource_id == resource_id)
+    )
+    count = usage_count.scalar() or 0
+    
+    if count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Невозможно удалить: ресурс используется в {count} норматив(ах). Сначала удалите нормативы."
+        )
+    
+    await db.delete(resource)
     await db.commit()
     return None
 
 
-# =============================================
-# Resource Rates (Расценки на ресурсы)
-# =============================================
-
-@router.post("/rates", response_model=ResourceRateResponse, status_code=status.HTTP_201_CREATED)
-async def create_resource_rate(item: ResourceRateCreate, db: AsyncSession = Depends(get_db)):
-    resource = await db.execute(select(Resource).where(Resource.id == item.resource_id))
-    if not resource.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Ресурс с ID {item.resource_id} не найден",
-        )
-
-    db_item = ResourceRate(**item.model_dump())
-    db.add(db_item)
-    await db.commit()
-    await db.refresh(db_item)
-    return db_item
-
-
+# ============================================================
+# RESOURCE RATES (Расценки на ресурсы)
+# ============================================================
 @router.get("/rates", response_model=List[ResourceRateResponse])
 async def get_resource_rates(
-    resource_id: Optional[int] = None,  # <-- ИСПРАВЛЕНО ЗДЕСЬ
-    db: AsyncSession = Depends(get_db),
+    resource_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
 ):
-    query = select(ResourceRate)
+    """Получить все расценки на ресурсы."""
+    query = select(ResourceRate).options(selectinload(ResourceRate.resource))
     if resource_id is not None:
         query = query.where(ResourceRate.resource_id == resource_id)
+    query = query.order_by(ResourceRate.valid_from.desc())
+    
     result = await db.execute(query)
-    return result.scalars().all()
+    rates = result.scalars().all()
+    
+    response = []
+    for r in rates:
+        response.append(ResourceRateResponse(
+            id=r.id,
+            resource_id=r.resource_id,
+            price_per_unit=r.price_per_unit,
+            valid_from=r.valid_from,
+            valid_to=r.valid_to,
+            resource_name=r.resource.name if r.resource else "Неизвестно"
+        ))
+    return response
 
 
-@router.get("/rates/{rate_id}", response_model=ResourceRateResponse)
-async def get_resource_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
+@router.post("/rates", response_model=ResourceRateResponse, status_code=status.HTTP_201_CREATED)
+async def create_resource_rate(rate_in: ResourceRateCreate, db: AsyncSession = Depends(get_db)):
+    """Создать расценку на ресурс."""
+    # Проверка ресурса
+    resource = await db.execute(select(Resource).where(Resource.id == rate_in.resource_id))
+    if not resource.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Ресурс не найден")
+    
+    # Проверка пересечения периодов
+    overlap_filter = and_(
+        ResourceRate.resource_id == rate_in.resource_id,
+        ResourceRate.valid_from <= rate_in.valid_from,
+        or_(ResourceRate.valid_to.is_(None), ResourceRate.valid_to >= rate_in.valid_from)
+    )
+    
+    if rate_in.valid_to is not None:
+        overlap_filter = and_(
+            overlap_filter,
+            rate_in.valid_to >= ResourceRate.valid_from
+        )
+    
+    result = await db.execute(select(ResourceRate).where(overlap_filter))
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail="Расценка на этот период для данного ресурса уже существует"
+        )
+    
+    db_rate = ResourceRate(**rate_in.model_dump())
+    db.add(db_rate)
+    await db.commit()
+    await db.refresh(db_rate, attribute_names=['resource'])
+    
+    return ResourceRateResponse(
+        id=db_rate.id,
+        resource_id=db_rate.resource_id,
+        price_per_unit=db_rate.price_per_unit,
+        valid_from=db_rate.valid_from,
+        valid_to=db_rate.valid_to,
+        resource_name=db_rate.resource.name
+    )
+
+
+@router.patch("/rates/{rate_id}", response_model=ResourceRateResponse)
+async def update_resource_rate(
+    rate_id: int,
+    rate_in: ResourceRateUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """Обновить расценку на ресурс."""
     result = await db.execute(select(ResourceRate).where(ResourceRate.id == rate_id))
-    item = result.scalar_one_or_none()
-    if not item:
+    rate = result.scalar_one_or_none()
+    if not rate:
         raise HTTPException(status_code=404, detail="Расценка не найдена")
-    return item
+    
+    for field, value in rate_in.model_dump(exclude_unset=True).items():
+        setattr(rate, field, value)
+    
+    await db.commit()
+    await db.refresh(rate, attribute_names=['resource'])
+    
+    return ResourceRateResponse(
+        id=rate.id,
+        resource_id=rate.resource_id,
+        price_per_unit=rate.price_per_unit,
+        valid_from=rate.valid_from,
+        valid_to=rate.valid_to,
+        resource_name=rate.resource.name
+    )
 
 
 @router.delete("/rates/{rate_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_resource_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
+    """Удалить расценку на ресурс."""
     result = await db.execute(select(ResourceRate).where(ResourceRate.id == rate_id))
-    item = result.scalar_one_or_none()
-    if not item:
+    rate = result.scalar_one_or_none()
+    if not rate:
         raise HTTPException(status_code=404, detail="Расценка не найдена")
-    await db.delete(item)
+    
+    await db.delete(rate)
     await db.commit()
     return None
 
 
-# =============================================
-# Resource Norms (Нормативы ресурсов на ед. услуги)
-# =============================================
-
-@router.post("/norms", response_model=ResourceNormResponse, status_code=status.HTTP_201_CREATED)
-async def create_resource_norm(item: ResourceNormCreate, db: AsyncSession = Depends(get_db)):
-    resource = await db.execute(select(Resource).where(Resource.id == item.resource_id))
-    if not resource.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Ресурс с ID {item.resource_id} не найден",
-        )
-
-    service = await db.execute(select(ServiceType).where(ServiceType.id == item.service_type_id))
-    if not service.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Вид услуги с ID {item.service_type_id} не найден",
-        )
-
-    db_item = ResourceNorm(**item.model_dump())
-    db.add(db_item)
-    await db.commit()
-    await db.refresh(db_item)
-    return db_item
-
-
+# ============================================================
+# RESOURCE NORMS (Нормативы ресурсов на услуги)
+# ============================================================
 @router.get("/norms", response_model=List[ResourceNormResponse])
 async def get_resource_norms(
-    service_type_id: Optional[int] = None,  # <-- ИСПРАВЛЕНО ЗДЕСЬ
-    resource_id: Optional[int] = None,      # <-- ИСПРАВЛЕНО ЗДЕСЬ
-    db: AsyncSession = Depends(get_db),
+    service_type_id: Optional[int] = None,
+    resource_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
 ):
-    query = select(ResourceNorm)
+    """Получить все нормативы с фильтрацией."""
+    query = select(ResourceNorm).options(
+        selectinload(ResourceNorm.service_type),
+        selectinload(ResourceNorm.resource)
+    ).where(ResourceNorm.is_active == True)
+    
     if service_type_id is not None:
         query = query.where(ResourceNorm.service_type_id == service_type_id)
     if resource_id is not None:
         query = query.where(ResourceNorm.resource_id == resource_id)
+    
+    query = query.order_by(ResourceNorm.service_type_id, ResourceNorm.resource_id)
+    
     result = await db.execute(query)
-    return result.scalars().all()
+    norms = result.scalars().all()
+    
+    response = []
+    for n in norms:
+        response.append(ResourceNormResponse(
+            id=n.id,
+            service_type_id=n.service_type_id,
+            resource_id=n.resource_id,
+            quantity_per_unit=n.quantity_per_unit,
+            is_active=n.is_active,
+            valid_from=n.valid_from,
+            valid_to=n.valid_to,
+            service_name=n.service_type.name if n.service_type else "Неизвестно",
+            resource_name=n.resource.name if n.resource else "Неизвестно"
+        ))
+    return response
 
 
-@router.get("/norms/{norm_id}", response_model=ResourceNormResponse)
-async def get_resource_norm(norm_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ResourceNorm).where(ResourceNorm.id == norm_id))
-    item = result.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="Норматив не найден")
-    return item
+@router.post("/norms", response_model=ResourceNormResponse, status_code=status.HTTP_201_CREATED)
+async def create_resource_norm(norm_in: ResourceNormCreate, db: AsyncSession = Depends(get_db)):
+    """Создать норматив ресурса на услугу."""
+    # Проверка услуги
+    service = await db.execute(select(ServiceType).where(ServiceType.id == norm_in.service_type_id))
+    if not service.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Услуга не найдена")
+    
+    # Проверка ресурса
+    resource = await db.execute(select(Resource).where(Resource.id == norm_in.resource_id))
+    if not resource.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Ресурс не найден")
+    
+    # Проверка уникальности (услуга + ресурс + дата начала)
+    existing = await db.execute(
+        select(ResourceNorm).where(
+            ResourceNorm.service_type_id == norm_in.service_type_id,
+            ResourceNorm.resource_id == norm_in.resource_id,
+            ResourceNorm.valid_from == norm_in.valid_from
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=400,
+            detail="Норматив для этой услуги и ресурса на эту дату уже существует"
+        )
+    
+    db_norm = ResourceNorm(**norm_in.model_dump())
+    db.add(db_norm)
+    await db.commit()
+    await db.refresh(db_norm, attribute_names=['service_type', 'resource'])
+    
+    return ResourceNormResponse(
+        id=db_norm.id,
+        service_type_id=db_norm.service_type_id,
+        resource_id=db_norm.resource_id,
+        quantity_per_unit=db_norm.quantity_per_unit,
+        is_active=db_norm.is_active,
+        valid_from=db_norm.valid_from,
+        valid_to=db_norm.valid_to,
+        service_name=db_norm.service_type.name,
+        resource_name=db_norm.resource.name
+    )
 
 
 @router.patch("/norms/{norm_id}", response_model=ResourceNormResponse)
 async def update_resource_norm(
-    norm_id: int, item_in: ResourceNormUpdate, db: AsyncSession = Depends(get_db)
+    norm_id: int,
+    norm_in: ResourceNormUpdate,
+    db: AsyncSession = Depends(get_db)
 ):
+    """Обновить норматив."""
     result = await db.execute(select(ResourceNorm).where(ResourceNorm.id == norm_id))
-    item = result.scalar_one_or_none()
-    if not item:
+    norm = result.scalar_one_or_none()
+    if not norm:
         raise HTTPException(status_code=404, detail="Норматив не найден")
-
-    update_data = item_in.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(item, field, value)
-
+    
+    for field, value in norm_in.model_dump(exclude_unset=True).items():
+        setattr(norm, field, value)
+    
     await db.commit()
-    await db.refresh(item)
-    return item
+    await db.refresh(norm, attribute_names=['service_type', 'resource'])
+    
+    return ResourceNormResponse(
+        id=norm.id,
+        service_type_id=norm.service_type_id,
+        resource_id=norm.resource_id,
+        quantity_per_unit=norm.quantity_per_unit,
+        is_active=norm.is_active,
+        valid_from=norm.valid_from,
+        valid_to=norm.valid_to,
+        service_name=norm.service_type.name if norm.service_type else "Неизвестно",
+        resource_name=norm.resource.name if norm.resource else "Неизвестно"
+    )
 
 
 @router.delete("/norms/{norm_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_resource_norm(norm_id: int, db: AsyncSession = Depends(get_db)):
+    """Удалить норматив."""
     result = await db.execute(select(ResourceNorm).where(ResourceNorm.id == norm_id))
-    item = result.scalar_one_or_none()
-    if not item:
+    norm = result.scalar_one_or_none()
+    if not norm:
         raise HTTPException(status_code=404, detail="Норматив не найден")
-    await db.delete(item)
+    
+    await db.delete(norm)
     await db.commit()
     return None

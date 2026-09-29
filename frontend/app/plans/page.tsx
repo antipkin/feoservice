@@ -49,6 +49,20 @@ const COL_ACTION_W = 90;
 const COL_TOTAL_SUM_W = 140;
 
 export default function PlansPage() {
+  const handleRecalculateRates = async () => {
+    if (!selectedPlan) return;
+    if (!window.confirm('Пересчитать все расценки в плане на основе актуальных тарифов из справочника?\n\nЭто обновит цены во всех месяцах для всех услуг.')) return;
+    
+    setLoading(true);
+    try {
+      await plansApi.recalculateRates(selectedPlan.id);
+      await loadPlanDetails(selectedPlan.id);
+      alert('✅ Расценки в плане успешно обновлены на основе актуальных тарифов!');
+    } catch (e: any) {
+      alert(`Ошибка пересчёта: ${e.message}`);
+    }
+    setLoading(false);
+  };
   const [objects, setObjects] = useState<ObjectData[]>([]);
   const [services, setServices] = useState<ServiceData[]>([]);
   const [categories, setCategories] = useState<ServiceCategoryData[]>([]);
@@ -265,9 +279,22 @@ export default function PlansPage() {
         <CardContent>
           {selectedPlan ? (
             <>
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <h3 className="text-lg font-semibold">Позиции плана</h3>
-                <Button size="sm" onClick={() => { setEditingItem(null); setDialogOpen(true); }}>＋ Добавить услугу</Button>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleRecalculateRates} 
+                    disabled={loading}
+                    title="Обновить цены во всех месяцах на основе актуальных расценок из справочника"
+                  >
+                    🔄 Обновить расценки
+                  </Button>
+                  <Button size="sm" onClick={() => { setEditingItem(null); setDialogOpen(true); }}>
+                    ＋ Добавить услугу
+                  </Button>
+                </div>
               </div>
 
               {loading ? <p>Загрузка...</p> : (

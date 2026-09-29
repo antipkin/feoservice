@@ -7,6 +7,7 @@ from app.models.services import ServiceType, ServiceRate, Resource, ResourceRate
 from app.models.planning import PlanHeader, PlanItem, PlanResource, PlanMonthly
 from app.models.facts import FactHeader, FactItem, FactResource, Act, ActItem
 from app.models.reports import Report, ReportItem
+from app.models.pricing_settings import ServicePricingSettings
 
 __all__ = [
     "Base",
@@ -17,5 +18,5 @@ __all__ = [
     "ServiceType", "ServiceRate", "Resource", "ResourceRate", "ResourceNorm",
     "PlanHeader", "PlanItem", "PlanResource", "PlanMonthly",
     "FactHeader", "FactItem", "FactResource", "Act", "ActItem",
-    "Report", "ReportItem",
+    "Report", "ReportItem", "ServicePricingSettings",
 ]

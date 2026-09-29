@@ -13,7 +13,7 @@ export default function Home() {
         </h1>
         <p className="text-lg text-muted-foreground">
           Комплексная система управления обслуживанием МКД и паркингов:
-          планирование тарифов, учёт выполненных работ, формирование актов и отчётов
+          планирование тарифов на основе ресурсов, учёт выполненных работ, формирование актов и глубокий анализ себестоимости.
         </p>
         <div className="mt-4">
           <Link href="/help">
@@ -31,37 +31,70 @@ export default function Home() {
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader>
               <CardTitle>🏢 Объекты</CardTitle>
-              <CardDescription>Управление МКД и паркингами, настройка базы расчёта тарифа</CardDescription>
+              <CardDescription>Управление МКД и паркингами, база расчёта</CardDescription>
             </CardHeader>
             <CardContent>
               <Link href="/objects"><Button className="w-full">Перейти</Button></Link>
             </CardContent>
           </Card>
-
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader>
               <CardTitle>🔧 Услуги</CardTitle>
-              <CardDescription>Виды услуг, категории, периодичность выполнения</CardDescription>
+              <CardDescription>Виды услуг, категории, периодичность</CardDescription>
             </CardHeader>
             <CardContent>
               <Link href="/services"><Button className="w-full">Перейти</Button></Link>
             </CardContent>
           </Card>
-
+          <Card className="hover:shadow-md transition-shadow">
+            <CardHeader>
+              <CardTitle>📂 Категории</CardTitle>
+              <CardDescription>Группировка услуг для отчётов и аналитики</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link href="/service-categories"><Button className="w-full">Перейти</Button></Link>
+            </CardContent>
+          </Card>
+          <Card className="hover:shadow-md transition-shadow">
+            <CardHeader>
+              <CardTitle>📏 Ед. изм.</CardTitle>
+              <CardDescription>Справочник единиц измерения</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link href="/units"><Button className="w-full">Перейти</Button></Link>
+            </CardContent>
+          </Card>
+          <Card className="hover:shadow-md transition-shadow">
+            <CardHeader>
+              <CardTitle>📦 Ресурсы</CardTitle>
+              <CardDescription>Материалы, труд, нормативы и расценки</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link href="/resources"><Button className="w-full">Перейти</Button></Link>
+            </CardContent>
+          </Card>
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader>
               <CardTitle>💰 Расценки</CardTitle>
-              <CardDescription>Цены на услуги с привязкой к объекту и периодом действия</CardDescription>
+              <CardDescription>Цены на услуги с привязкой к объекту</CardDescription>
             </CardHeader>
             <CardContent>
               <Link href="/rates"><Button className="w-full">Перейти</Button></Link>
             </CardContent>
           </Card>
-
+          <Card className="hover:shadow-md transition-shadow">
+            <CardHeader>
+              <CardTitle>⚙️ Настройки расчёта</CardTitle>
+              <CardDescription>Накладные, прибыль, НДС с наследованием</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link href="/pricing-settings"><Button className="w-full">Перейти</Button></Link>
+            </CardContent>
+          </Card>
           <Card className="hover:shadow-md transition-shadow">
             <CardHeader>
               <CardTitle>📊 Дашборд</CardTitle>
-              <CardDescription>KPI, графики план-факт, топ отклонений, аналитика</CardDescription>
+              <CardDescription>KPI, графики план-факт, топ отклонений</CardDescription>
             </CardHeader>
             <CardContent>
               <Link href="/dashboard"><Button className="w-full">Перейти</Button></Link>
@@ -78,14 +111,13 @@ export default function Home() {
             <CardHeader>
               <CardTitle>📊 Планирование (ФЭО)</CardTitle>
               <CardDescription>
-                Создание планов с помесячными расценками, расчёт тарифа, индексация на ИПЦ, импорт из Excel
+                Создание планов с помесячными расценками, авторасчёт тарифа, индексация на ИПЦ, импорт из Excel
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Link href="/plans"><Button className="w-full">Перейти</Button></Link>
             </CardContent>
           </Card>
-
           <Card className="hover:shadow-md transition-shadow border-primary/50">
             <CardHeader>
               <CardTitle>📋 Ввод факта</CardTitle>
@@ -98,9 +130,9 @@ export default function Home() {
         </div>
       </div>
 
-      {/* 📄 ДОКУМЕНТООБОРОТ */}
+      {/* 📄 ДОКУМЕНТООБОРОТ И АНАЛИТИКА */}
       <div className="mb-8">
-        <h2 className="text-2xl font-bold tracking-tight mb-4">📄 Документооборот</h2>
+        <h2 className="text-2xl font-bold tracking-tight mb-4">📄 Документооборот и Аналитика</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <Card className="hover:shadow-md transition-shadow border-green-500/50 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
             <CardHeader>
@@ -109,7 +141,7 @@ export default function Home() {
                 Акты
               </CardTitle>
               <CardDescription>
-                Формирование актов на основе факта, экспорт в PDF, учёт периодичности услуг
+                Формирование актов на основе факта, экспорт в PDF, учёт периодичности
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -118,7 +150,6 @@ export default function Home() {
               </Link>
             </CardContent>
           </Card>
-
           <Card className="hover:shadow-md transition-shadow border-purple-500/50 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -135,26 +166,20 @@ export default function Home() {
               </Link>
             </CardContent>
           </Card>
-
-          <Card className="hover:shadow-md transition-shadow">
+          <Card className="hover:shadow-md transition-shadow border-amber-500/50 bg-gradient-to-br from-amber-50 to-white dark:from-amber-950/20 dark:to-background">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <span className="text-2xl">📥</span>
-                Импорт и экспорт
+                <span className="text-2xl">🔍</span>
+                Анализ себестоимости
               </CardTitle>
               <CardDescription>
-                Загрузка планов из Excel, выгрузка в Excel и PDF
+                Детальная разбивка по ресурсам и моделирование изменений цен
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="text-sm text-muted-foreground space-y-2">
-                <p>• <Link href="/plans/import" className="text-primary hover:underline">Импорт плана из Excel</Link></p>
-                <p>• <Link href="/plans" className="text-primary hover:underline">Экспорт планов</Link></p>
-                <p>• <Link href="/facts" className="text-primary hover:underline">Экспорт фактов</Link></p>
-                <p>• <Link href="/acts" className="text-primary hover:underline">Экспорт актов</Link></p>
-                <p>• <Link href="/reports" className="text-primary hover:underline">Экспорт отчётов</Link></p>
-                <p>• <Link href="/rates" className="text-primary hover:underline">Экспорт расценок</Link></p>
-              </div>
+              <Link href="/cost-analysis">
+                <Button className="w-full bg-amber-600 hover:bg-amber-700">Перейти к анализу</Button>
+              </Link>
             </CardContent>
           </Card>
         </div>
@@ -177,7 +202,6 @@ export default function Home() {
               </CardContent>
             </Card>
           </Link>
-
           <Link href="/facts">
             <Card className="hover:shadow-md transition-shadow cursor-pointer hover:border-primary/50">
               <CardContent className="pt-6">
@@ -191,7 +215,6 @@ export default function Home() {
               </CardContent>
             </Card>
           </Link>
-
           <Link href="/acts">
             <Card className="hover:shadow-md transition-shadow cursor-pointer hover:border-primary/50">
               <CardContent className="pt-6">
@@ -205,7 +228,6 @@ export default function Home() {
               </CardContent>
             </Card>
           </Link>
-
           <Link href="/reports">
             <Card className="hover:shadow-md transition-shadow cursor-pointer hover:border-primary/50">
               <CardContent className="pt-6">
@@ -230,14 +252,16 @@ export default function Home() {
             <div className="flex-1">
               <h3 className="font-semibold mb-2">Как работать с системой?</h3>
               <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-                <li>Создайте объекты обслуживания (МКД, паркинги) в <Link href="/objects" className="text-primary hover:underline">справочнике объектов</Link></li>
-                <li>Настройте виды услуг и их периодичность в <Link href="/services" className="text-primary hover:underline">справочнике услуг</Link></li>
-                <li>Установите расценки для каждого объекта в разделе <Link href="/rates" className="text-primary hover:underline">Расценки</Link></li>
-                <li>Составьте план ФЭО на нужный период в разделе <Link href="/plans" className="text-primary hover:underline">Планирование</Link></li>
+                <li>Создайте объекты обслуживания в <Link href="/objects" className="text-primary hover:underline">справочнике объектов</Link></li>
+                <li>Настройте виды услуг, категории и единицы измерения в соответствующих <Link href="/services" className="text-primary hover:underline">справочниках</Link></li>
+                <li>Добавьте ресурсы, нормативы и расценки на них в разделе <Link href="/resources" className="text-primary hover:underline">Ресурсы</Link></li>
+                <li>Настройте накладные расходы, норму прибыли и НДС в разделе <Link href="/pricing-settings" className="text-primary hover:underline">Настройки расчёта</Link></li>
+                <li>Составьте план ФЭО на нужный период в разделе <Link href="/plans" className="text-primary hover:underline">Планирование</Link> (система автоматически рассчитает расценки)</li>
                 <li>Ежемесячно вносите фактические объёмы в разделе <Link href="/facts" className="text-primary hover:underline">Ввод факта</Link></li>
                 <li>Формируйте акты выполненных работ в разделе <Link href="/acts" className="text-primary hover:underline">Акты</Link></li>
-                <li>Создавайте отчёты за произвольный период в разделе <Link href="/reports" className="text-primary hover:underline">Отчёты</Link></li>
-                <li>Анализируйте показатели на <Link href="/dashboard" className="text-primary hover:underline">Дашборде</Link></li>
+                <li>Создавайте сводные отчёты за произвольный период в разделе <Link href="/reports" className="text-primary hover:underline">Отчёты</Link></li>
+                <li>Анализируйте структуру себестоимости и моделируйте изменения цен в разделе <Link href="/cost-analysis" className="text-primary hover:underline">Анализ себестоимости</Link></li>
+                <li>Отслеживайте KPI и отклонения на <Link href="/dashboard" className="text-primary hover:underline">Дашборде</Link></li>
               </ol>
             </div>
           </div>

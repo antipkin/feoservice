@@ -6,6 +6,8 @@ from app.routers import (
     objects, services, resources, planning, units,
     service_categories, facts, acts, dashboard, reports
 )
+from app.routers import pricing_settings
+from app.routers import cost_analysis
 
 app = FastAPI(
     title="ДомСервис API",
@@ -31,6 +33,8 @@ app.include_router(facts.router, prefix="/api/v1")
 app.include_router(acts.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
+app.include_router(pricing_settings.router, prefix="/api/v1")
+app.include_router(cost_analysis.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():
