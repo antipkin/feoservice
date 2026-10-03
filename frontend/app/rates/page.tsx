@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { CanAccess } from '@/lib/rbac'; // 🎯 ИМПОРТ RBAC
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
@@ -18,12 +19,11 @@ export default function RatesPage() {
   const [objects, setObjects] = useState<ObjectData[]>([]);
   const [services, setServices] = useState<ServiceData[]>([]);
   const [loading, setLoading] = useState(true);
-  
   const [filterObjectId, setFilterObjectId] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingRate, setEditingRate] = useState<ServiceRateData | null>(null);
-
   const currentYear = new Date().getFullYear();
+
   const [formData, setFormData] = useState({
     object_id: '',
     service_type_id: '',
@@ -46,7 +46,9 @@ export default function RatesPage() {
         setObjects(objs);
         setServices(svcs);
         setRates(rts);
-      } catch (e) { console.error('Ошибка загрузки:', e); }
+      } catch (e) {
+        console.error('Ошибка загрузки:', e);
+      }
       setLoading(false);
     };
     loadData();
@@ -89,7 +91,6 @@ export default function RatesPage() {
       const validFrom = `${formData.valid_from_year}-${formData.valid_from_month.padStart(2, '0')}-01`;
       let validTo = null;
       if (formData.has_valid_to) {
-        // Последний день месяца
         const lastDay = new Date(parseInt(formData.valid_to_year), parseInt(formData.valid_to_month), 0).getDate();
         validTo = `${formData.valid_to_year}-${formData.valid_to_month.padStart(2, '0')}-${lastDay}`;
       }
@@ -107,7 +108,6 @@ export default function RatesPage() {
       } else {
         await servicesApi.createRate(payload);
       }
-
       setDialogOpen(false);
       setRates(await servicesApi.getRates(filterObjectId === 'all' ? undefined : parseInt(filterObjectId)));
     } catch (e: any) {
@@ -135,7 +135,10 @@ export default function RatesPage() {
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => window.open(servicesApi.exportRatesExcel(filterObjectId === 'all' ? undefined : parseInt(filterObjectId)), '_blank')}>📊 Excel</Button>
           <Button variant="outline" onClick={() => window.open(servicesApi.exportRatesPdf(filterObjectId === 'all' ? undefined : parseInt(filterObjectId)), '_blank')}>📄 PDF</Button>
-          <Button onClick={() => handleOpenDialog()}>＋ Добавить расценку</Button>
+          {/* 🎯 Кнопка создания видна только admin и economist */}
+          <CanAccess roles={['admin', 'economist']}>
+            <Button onClick={() => handleOpenDialog()}>＋ Добавить расценку</Button>
+          </CanAccess>
         </div>
       </div>
 
@@ -163,7 +166,10 @@ export default function RatesPage() {
                     <TableHead>Цена за ед.</TableHead>
                     <TableHead>Действует с</TableHead>
                     <TableHead>Действует по</TableHead>
-                    <TableHead className="text-right">Действия</TableHead>
+                    {/* 🎯 Заголовок "Действия" виден только admin и economist */}
+                    <CanAccess roles={['admin', 'economist']}>
+                      <TableHead className="text-right">Действия</TableHead>
+                    </CanAccess>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -177,12 +183,15 @@ export default function RatesPage() {
                         <TableCell className="font-semibold">{formatMoney(rate.price_per_unit)}</TableCell>
                         <TableCell>{formatDate(rate.valid_from)}</TableCell>
                         <TableCell>{formatDate(rate.valid_to)}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="sm" onClick={() => handleOpenDialog(rate)}>✏️</Button>
-                            <Button variant="ghost" size="sm" onClick={() => handleDelete(rate)} className="hover:bg-destructive/10 hover:text-destructive">🗑️</Button>
-                          </div>
-                        </TableCell>
+                        {/* 🎯 Кнопки редактирования/удаления видны только admin и economist */}
+                        <CanAccess roles={['admin', 'economist']}>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="sm" onClick={() => handleOpenDialog(rate)}>✏️</Button>
+                              <Button variant="ghost" size="sm" onClick={() => handleDelete(rate)} className="hover:bg-destructive/10 hover:text-destructive">🗑️</Button>
+                            </div>
+                          </TableCell>
+                        </CanAccess>
                       </TableRow>
                     ))
                   )}
@@ -193,79 +202,76 @@ export default function RatesPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingRate ? 'Редактировать расценку' : 'Новая расценка'}</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4 pt-4">
-            <div className="space-y-2">
-              <Label>Объект (оставьте пустым для глобальной расценки)</Label>
-              <Select value={formData.object_id} onValueChange={(v) => setFormData({...formData, object_id: v})}>
-                <SelectTrigger><SelectValue placeholder="Глобальная расценка" /></SelectTrigger>
-                <SelectContent>
-                  {objects.map(o => <SelectItem key={o.id} value={o.id.toString()}>{o.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Услуга *</Label>
-              <Select value={formData.service_type_id} onValueChange={(v) => setFormData({...formData, service_type_id: v})} required>
-                <SelectTrigger><SelectValue placeholder="Выберите услугу" /></SelectTrigger>
-                <SelectContent>
-                  {services.map(s => <SelectItem key={s.id} value={s.id.toString()}>{s.name} ({s.unit?.symbol})</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Цена за единицу *</Label>
-              <Input type="number" step="0.01" value={formData.price_per_unit} onChange={(e) => setFormData({...formData, price_per_unit: e.target.value})} required />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+      {/* 🎯 Диалог создания/редактирования — только для admin и economist */}
+      <CanAccess roles={['admin', 'economist']}>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{editingRate ? 'Редактировать расценку' : 'Новая расценка'}</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleSubmit} className="space-y-4 pt-4">
               <div className="space-y-2">
-                <Label>Действует с (месяц) *</Label>
-                <Select value={formData.valid_from_month} onValueChange={(v) => setFormData({...formData, valid_from_month: v})} required>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{MONTH_NAMES.map((m, i) => <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>)}</SelectContent>
+                <Label>Объект (оставьте пустым для глобальной расценки)</Label>
+                <Select value={formData.object_id} onValueChange={(v) => setFormData({...formData, object_id: v})}>
+                  <SelectTrigger><SelectValue placeholder="Глобальная расценка" /></SelectTrigger>
+                  <SelectContent>
+                    {objects.map(o => <SelectItem key={o.id} value={o.id.toString()}>{o.name}</SelectItem>)}
+                  </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Год *</Label>
-                <Input type="number" value={formData.valid_from_year} onChange={(e) => setFormData({...formData, valid_from_year: e.target.value})} required />
+                <Label>Услуга *</Label>
+                <Select value={formData.service_type_id} onValueChange={(v) => setFormData({...formData, service_type_id: v})} required>
+                  <SelectTrigger><SelectValue placeholder="Выберите услугу" /></SelectTrigger>
+                  <SelectContent>
+                    {services.map(s => <SelectItem key={s.id} value={s.id.toString()}>{s.name} ({s.unit?.symbol})</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
-            </div>
-
-            <div className="flex items-center space-x-2 pt-2">
-              <input type="checkbox" id="has_valid_to" checked={formData.has_valid_to} onChange={(e) => setFormData({...formData, has_valid_to: e.target.checked})} className="rounded" />
-              <Label htmlFor="has_valid_to" className="cursor-pointer">Указать дату окончания действия</Label>
-            </div>
-
-            {formData.has_valid_to && (
-              <div className="grid grid-cols-2 gap-4 p-3 bg-muted/50 rounded-lg">
+              <div className="space-y-2">
+                <Label>Цена за единицу *</Label>
+                <Input type="number" step="0.01" value={formData.price_per_unit} onChange={(e) => setFormData({...formData, price_per_unit: e.target.value})} required />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>По месяц *</Label>
-                  <Select value={formData.valid_to_month} onValueChange={(v) => setFormData({...formData, valid_to_month: v})} required>
+                  <Label>Действует с (месяц) *</Label>
+                  <Select value={formData.valid_from_month} onValueChange={(v) => setFormData({...formData, valid_from_month: v})} required>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>{MONTH_NAMES.map((m, i) => <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
                   <Label>Год *</Label>
-                  <Input type="number" value={formData.valid_to_year} onChange={(e) => setFormData({...formData, valid_to_year: e.target.value})} required />
+                  <Input type="number" value={formData.valid_from_year} onChange={(e) => setFormData({...formData, valid_from_year: e.target.value})} required />
                 </div>
               </div>
-            )}
-
-            <div className="flex gap-2 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setDialogOpen(false)}>Отмена</Button>
-              <Button type="submit" className="flex-1">{editingRate ? 'Сохранить' : 'Создать'}</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+              <div className="flex items-center space-x-2 pt-2">
+                <input type="checkbox" id="has_valid_to" checked={formData.has_valid_to} onChange={(e) => setFormData({...formData, has_valid_to: e.target.checked})} className="rounded" />
+                <Label htmlFor="has_valid_to" className="cursor-pointer">Указать дату окончания действия</Label>
+              </div>
+              {formData.has_valid_to && (
+                <div className="grid grid-cols-2 gap-4 p-3 bg-muted/50 rounded-lg">
+                  <div className="space-y-2">
+                    <Label>По месяц *</Label>
+                    <Select value={formData.valid_to_month} onValueChange={(v) => setFormData({...formData, valid_to_month: v})} required>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>{MONTH_NAMES.map((m, i) => <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Год *</Label>
+                    <Input type="number" value={formData.valid_to_year} onChange={(e) => setFormData({...formData, valid_to_year: e.target.value})} required />
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setDialogOpen(false)}>Отмена</Button>
+                <Button type="submit" className="flex-1">{editingRate ? 'Сохранить' : 'Создать'}</Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
     </div>
   );
 }

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+# backend/app/routers/acts.py
+import urllib.parse
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -6,69 +8,52 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from decimal import Decimal
 from datetime import date
-import urllib.parse
 
 from app.db.database import get_db
 from app.models.facts import Act, ActItem, FactHeader, FactItem
 from app.models.services import ServiceType
 from app.models.objects import Object
-from app.schemas.act import (
-    ActCreate, ActResponse, ActListItem, ActItemResponse
-)
+from app.models.user import User
+from app.schemas.act import ActCreate, ActResponse, ActListItem, ActItemResponse
 from app.utils.export import export_act_to_pdf
+from app.core.security import require_authenticated, require_economist_or_higher
+from app.utils.audit_helper import log_action
 
 router = APIRouter(prefix="/acts", tags=["Акты выполненных работ"])
 
 
-# --- Генерация номера акта ---
 async def _generate_act_number(db: AsyncSession) -> str:
     """Генерирует уникальный номер акта вида АКТ-YYYY-NNN."""
     year = date.today().year
-    # Считаем количество актов в текущем году
     result = await db.execute(
-        select(func.count(Act.id)).where(
-            Act.act_number.like(f'АКТ-{year}-%')
-        )
+        select(func.count(Act.id)).where(Act.act_number.like(f'АКТ-{year}-%'))
     )
     count = result.scalar() or 0
     return f"АКТ-{year}-{str(count + 1).zfill(3)}"
 
 
-# --- Создание акта из факта ---
 @router.post("/from-fact/{fact_id}", response_model=ActResponse, status_code=status.HTTP_201_CREATED)
-async def create_act_from_fact(fact_id: int, db: AsyncSession = Depends(get_db)):
-    """
-    Создаёт акт на основе факта. Копирует все позиции факта в акт,
-    включая периодичность из справочника услуг.
-    """
-    # 1. Получаем факт с позициями
+async def create_act_from_fact(
+    request: Request,
+    fact_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher)
+):
     fact_result = await db.execute(
-        select(FactHeader)
-        .options(selectinload(FactHeader.items))
-        .where(FactHeader.id == fact_id)
+        select(FactHeader).options(selectinload(FactHeader.items)).where(FactHeader.id == fact_id)
     )
     fact = fact_result.scalar_one_or_none()
     if not fact:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
-    # 2. Проверяем, не создан ли уже акт для этого факта
-    existing_act = await db.execute(
-        select(Act).where(Act.fact_header_id == fact_id)
-    )
+    existing_act = await db.execute(select(Act).where(Act.fact_header_id == fact_id))
     if existing_act.scalar_one_or_none():
-        raise HTTPException(
-            status_code=400,
-            detail="Акт для этого факта уже существует"
-        )
+        raise HTTPException(status_code=400, detail="Акт для этого факта уже существует")
 
-    # 3. Получаем услуги с периодичностью
     service_ids = [item.service_type_id for item in fact.items]
-    services_result = await db.execute(
-        select(ServiceType).where(ServiceType.id.in_(service_ids))
-    )
+    services_result = await db.execute(select(ServiceType).where(ServiceType.id.in_(service_ids)))
     services_dict = {s.id: s for s in services_result.scalars().all()}
 
-    # 4. Создаём акт
     act_number = await _generate_act_number(db)
     act = Act(
         act_number=act_number,
@@ -80,7 +65,6 @@ async def create_act_from_fact(fact_id: int, db: AsyncSession = Depends(get_db))
     db.add(act)
     await db.flush()
 
-    # 5. Копируем позиции факта в акт
     total = Decimal('0')
     for fact_item in fact.items:
         service = services_dict.get(fact_item.service_type_id)
@@ -94,25 +78,35 @@ async def create_act_from_fact(fact_id: int, db: AsyncSession = Depends(get_db))
         )
         db.add(act_item)
         total += fact_item.actual_amount or Decimal('0')
-
+    
     act.total_amount = total
     await db.commit()
 
-    # 6. Возвращаем созданный акт с позициями
-    result = await db.execute(
-        select(Act)
-        .options(selectinload(Act.items))
-        .where(Act.id == act.id)
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ АКТА
+    await log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        resource_type="ACT",
+        resource_id=act.id,
+        new_values={
+            "act_number": act.act_number,
+            "fact_header_id": act.fact_header_id,
+            "total_amount": str(act.total_amount)
+        },
+        ip_address=request.client.host if request.client else None
     )
+
+    result = await db.execute(select(Act).options(selectinload(Act.items)).where(Act.id == act.id))
     return result.scalar_one()
 
 
-# --- Получение списка актов ---
 @router.get("/", response_model=List[ActListItem])
 async def get_acts(
     object_id: Optional[int] = None,
     year: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated)
 ):
     query = select(Act).join(FactHeader, Act.fact_header_id == FactHeader.id)
     if object_id:
@@ -124,65 +118,71 @@ async def get_acts(
     return result.scalars().all()
 
 
-# --- Получение акта по ID ---
 @router.get("/{act_id}", response_model=ActResponse)
-async def get_act(act_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Act)
-        .options(selectinload(Act.items))
-        .where(Act.id == act_id)
-    )
+async def get_act(
+    act_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated)
+):
+    result = await db.execute(select(Act).options(selectinload(Act.items)).where(Act.id == act_id))
     act = result.scalar_one_or_none()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
     return act
 
 
-# --- Удаление акта ---
 @router.delete("/{act_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_act(act_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_act(
+    request: Request,
+    act_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher)
+):
     result = await db.execute(select(Act).where(Act.id == act_id))
     act = result.scalar_one_or_none()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
+
+    deleted_data = {"act_number": act.act_number, "total_amount": str(act.total_amount)}
+
     await db.delete(act)
     await db.commit()
+
+    # 🎯 ЛОГИРОВАНИЕ УДАЛЕНИЯ АКТА
+    await log_action(
+        db=db,
+        user=current_user,
+        action="DELETE",
+        resource_type="ACT",
+        resource_id=act_id,
+        old_values=deleted_data,
+        ip_address=request.client.host if request.client else None
+    )
     return None
 
 
-# --- Экспорт акта в PDF ---
 @router.get("/{act_id}/export/pdf")
-async def export_act_pdf(act_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Act)
-        .options(selectinload(Act.items))
-        .where(Act.id == act_id)
-    )
+async def export_act_pdf(
+    act_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated)
+):
+    result = await db.execute(select(Act).options(selectinload(Act.items)).where(Act.id == act_id))
     act = result.scalar_one_or_none()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
 
-    # Получаем факт и объект
-    fact_result = await db.execute(
-        select(FactHeader).where(FactHeader.id == act.fact_header_id)
-    )
+    fact_result = await db.execute(select(FactHeader).where(FactHeader.id == act.fact_header_id))
     fact = fact_result.scalar_one()
-
-    obj_result = await db.execute(
-        select(Object).where(Object.id == fact.object_id)
-    )
+    obj_result = await db.execute(select(Object).where(Object.id == fact.object_id))
     obj = obj_result.scalar_one()
 
-    # Получаем услуги для названий и единиц измерения
     service_ids = [item.service_type_id for item in act.items]
     services_result = await db.execute(
-        select(ServiceType).options(selectinload(ServiceType.unit)).where(
-            ServiceType.id.in_(service_ids)
-        )
+        select(ServiceType).options(selectinload(ServiceType.unit)).where(ServiceType.id.in_(service_ids))
     )
     services_dict = {s.id: s for s in services_result.scalars().all()}
 
-    # Собираем данные для PDF
     act_data = {
         "act_number": act.act_number,
         "act_date": act.act_date.strftime("%d.%m.%Y"),
@@ -192,7 +192,6 @@ async def export_act_pdf(act_id: int, db: AsyncSession = Depends(get_db)):
         "period_year": fact.year,
         "total_amount": str(act.total_amount),
     }
-
     items_data = []
     for item in act.items:
         service = services_dict.get(item.service_type_id)
@@ -206,10 +205,9 @@ async def export_act_pdf(act_id: int, db: AsyncSession = Depends(get_db)):
         })
 
     file_buffer = export_act_to_pdf(act_data, items_data)
-
     raw_filename = f"act_{act.act_number}.pdf"
     encoded_filename = urllib.parse.quote(raw_filename)
-
+    
     return StreamingResponse(
         file_buffer,
         media_type="application/pdf",

@@ -19,9 +19,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import { CanAccess } from '@/lib/rbac'; // 🎯 ДОБАВЛЕН ИМПОРТ
 
-const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-                     'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
 const formatPeriod = (startMonth: number, startYear: number, endMonth: number, endYear: number) => {
   return `${MONTH_NAMES[startMonth - 1]} ${startYear} — ${MONTH_NAMES[endMonth - 1]} ${endYear}`;
@@ -32,12 +32,10 @@ export default function ReportsPage() {
   const [reports, setReports] = useState<ReportListItemData[]>([]);
   const [selectedReport, setSelectedReport] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
-
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
-
   const currentYear = new Date().getFullYear();
-
+  
   const [formData, setFormData] = useState({
     object_id: '',
     start_month: '1',
@@ -46,7 +44,7 @@ export default function ReportsPage() {
     end_year: currentYear.toString(),
     name: '',
   });
-
+  
   const [editData, setEditData] = useState({
     start_month: '',
     start_year: '',
@@ -91,7 +89,6 @@ export default function ReportsPage() {
         name: formData.name || null,
       };
       const created = await reportsApi.create(payload);
-      // Обновляем список
       const updatedReports = await reportsApi.getAll();
       setReports(updatedReports);
       setCreateDialogOpen(false);
@@ -134,7 +131,6 @@ export default function ReportsPage() {
       };
       const updated = await reportsApi.update(selectedReport.id, payload);
       setSelectedReport(updated);
-      // Обновляем список
       const updatedReports = await reportsApi.getAll();
       setReports(updatedReports);
       setEditDialogOpen(false);
@@ -161,7 +157,6 @@ export default function ReportsPage() {
 
   const formatMoney = (val: string | number) =>
     new Number(val).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 });
-
   const formatNumber = (val: string | number) =>
     new Number(val).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 
@@ -169,7 +164,10 @@ export default function ReportsPage() {
     <div className="container mx-auto py-6 px-4 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">📑 Отчеты по объектам</h1>
-        <Button onClick={() => setCreateDialogOpen(true)}>＋ Создать отчет</Button>
+        {/* 🎯 Кнопка создания видна только admin, economist, master */}
+        <CanAccess roles={['admin', 'economist', 'master']}>
+          <Button onClick={() => setCreateDialogOpen(true)}>＋ Создать отчет</Button>
+        </CanAccess>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -249,12 +247,17 @@ export default function ReportsPage() {
                   >
                     📄 PDF
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleOpenEdit}>
-                    ✏️ Редактировать
-                  </Button>
-                  <Button variant="destructive" size="sm" onClick={handleDelete}>
-                    🗑️ Удалить
-                  </Button>
+                  {/* 🎯 Кнопки редактирования и удаления только для admin, economist, master */}
+                  <CanAccess roles={['admin', 'economist', 'master']}>
+                    <Button variant="outline" size="sm" onClick={handleOpenEdit}>
+                      ✏️ Редактировать
+                    </Button>
+                  </CanAccess>
+                  <CanAccess roles={['admin', 'economist', 'master']}>
+                    <Button variant="destructive" size="sm" onClick={handleDelete}>
+                      🗑️ Удалить
+                    </Button>
+                  </CanAccess>
                 </div>
               )}
             </div>
@@ -333,150 +336,145 @@ export default function ReportsPage() {
         </Card>
       </div>
 
-      {/* Диалог создания */}
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Создать отчет по объекту</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleCreate} className="space-y-4 pt-4">
-            <div className="space-y-2">
-              <Label>Объект *</Label>
-              <Select value={formData.object_id} onValueChange={(v) => setFormData({...formData, object_id: v})} required>
-                <SelectTrigger><SelectValue placeholder="Выберите объект" /></SelectTrigger>
-                <SelectContent>
-                  {objects.map(o => (
-                    <SelectItem key={o.id} value={o.id.toString()}>{o.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+      {/* 🎯 Диалог создания отчета — только для admin, economist, master */}
+      <CanAccess roles={['admin', 'economist', 'master']}>
+        <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Создать отчет по объекту</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleCreate} className="space-y-4 pt-4">
               <div className="space-y-2">
-                <Label>Месяц начала *</Label>
-                <Select value={formData.start_month} onValueChange={(v) => setFormData({...formData, start_month: v})} required>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                <Label>Объект *</Label>
+                <Select value={formData.object_id} onValueChange={(v) => setFormData({...formData, object_id: v})} required>
+                  <SelectTrigger><SelectValue placeholder="Выберите объект" /></SelectTrigger>
                   <SelectContent>
-                    {MONTH_NAMES.map((m, i) => (
-                      <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
+                    {objects.map(o => (
+                      <SelectItem key={o.id} value={o.id.toString()}>{o.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>Год начала *</Label>
-                <Input type="number" value={formData.start_year}
-                       onChange={(e) => setFormData({...formData, start_year: e.target.value})} required />
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Месяц начала *</Label>
+                  <Select value={formData.start_month} onValueChange={(v) => setFormData({...formData, start_month: v})} required>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MONTH_NAMES.map((m, i) => (
+                        <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Год начала *</Label>
+                  <Input type="number" value={formData.start_year}
+                         onChange={(e) => setFormData({...formData, start_year: e.target.value})} required />
+                </div>
               </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Месяц конца *</Label>
-                <Select value={formData.end_month} onValueChange={(v) => setFormData({...formData, end_month: v})} required>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {MONTH_NAMES.map((m, i) => (
-                      <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Год конца *</Label>
-                <Input type="number" value={formData.end_year}
-                       onChange={(e) => setFormData({...formData, end_year: e.target.value})} required />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Название отчета (необязательно)</Label>
-              <Input value={formData.name}
-                     onChange={(e) => setFormData({...formData, name: e.target.value})}
-                     placeholder="Например: Отчет за 1 полугодие 2026" />
-            </div>
-
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-              <strong>💡 Как это работает:</strong> Система найдет все акты выбранного объекта
-              за указанный период и агрегирует данные по услугам.
-            </div>
-
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setCreateDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="submit" className="flex-1">Создать отчет</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Диалог редактирования */}
-      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Редактировать отчет</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleUpdate} className="space-y-4 pt-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Месяц начала *</Label>
-                <Select value={editData.start_month} onValueChange={(v) => setEditData({...editData, start_month: v})} required>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {MONTH_NAMES.map((m, i) => (
-                      <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Месяц конца *</Label>
+                  <Select value={formData.end_month} onValueChange={(v) => setFormData({...formData, end_month: v})} required>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MONTH_NAMES.map((m, i) => (
+                        <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Год конца *</Label>
+                  <Input type="number" value={formData.end_year}
+                         onChange={(e) => setFormData({...formData, end_year: e.target.value})} required />
+                </div>
               </div>
               <div className="space-y-2">
-                <Label>Год начала *</Label>
-                <Input type="number" value={editData.start_year}
-                       onChange={(e) => setEditData({...editData, start_year: e.target.value})} required />
+                <Label>Название отчета (необязательно)</Label>
+                <Input value={formData.name}
+                       onChange={(e) => setFormData({...formData, name: e.target.value})}
+                       placeholder="Например: Отчет за 1 полугодие 2026" />
               </div>
-            </div>
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                <strong>💡 Как это работает:</strong> Система найдет все акты выбранного объекта
+                за указанный период и агрегирует данные по услугам.
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setCreateDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button type="submit" className="flex-1">Создать отчет</Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
 
-            <div className="grid grid-cols-2 gap-4">
+      {/* 🎯 Диалог редактирования отчета — только для admin, economist, master */}
+      <CanAccess roles={['admin', 'economist', 'master']}>
+        <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Редактировать отчет</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleUpdate} className="space-y-4 pt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Месяц начала *</Label>
+                  <Select value={editData.start_month} onValueChange={(v) => setEditData({...editData, start_month: v})} required>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MONTH_NAMES.map((m, i) => (
+                        <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Год начала *</Label>
+                  <Input type="number" value={editData.start_year}
+                         onChange={(e) => setEditData({...editData, start_year: e.target.value})} required />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Месяц конца *</Label>
+                  <Select value={editData.end_month} onValueChange={(v) => setEditData({...editData, end_month: v})} required>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {MONTH_NAMES.map((m, i) => (
+                        <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Год конца *</Label>
+                  <Input type="number" value={editData.end_year}
+                         onChange={(e) => setEditData({...editData, end_year: e.target.value})} required />
+                </div>
+              </div>
               <div className="space-y-2">
-                <Label>Месяц конца *</Label>
-                <Select value={editData.end_month} onValueChange={(v) => setEditData({...editData, end_month: v})} required>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {MONTH_NAMES.map((m, i) => (
-                      <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>Название отчета</Label>
+                <Input value={editData.name}
+                       onChange={(e) => setEditData({...editData, name: e.target.value})} />
               </div>
-              <div className="space-y-2">
-                <Label>Год конца *</Label>
-                <Input type="number" value={editData.end_year}
-                       onChange={(e) => setEditData({...editData, end_year: e.target.value})} required />
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                <strong>⚠️ Внимание:</strong> При изменении периода данные отчета будут пересчитаны
+                на основе актов за новый период.
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Название отчета</Label>
-              <Input value={editData.name}
-                     onChange={(e) => setEditData({...editData, name: e.target.value})} />
-            </div>
-
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
-              <strong>⚠️ Внимание:</strong> При изменении периода данные отчета будут пересчитаны
-              на основе актов за новый период.
-            </div>
-
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setEditDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="submit" className="flex-1">Сохранить и пересчитать</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setEditDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button type="submit" className="flex-1">Сохранить и пересчитать</Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
     </div>
   );
 }

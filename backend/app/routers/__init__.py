@@ -10,6 +10,8 @@ from . import dashboard
 from . import reports
 from . import pricing_settings
 from . import cost_analysis
+from . import auth
+from . import users
 
 __all__ = [
     "objects",
@@ -24,4 +26,6 @@ __all__ = [
     "reports",
     "pricing_settings",
     "cost_analysis",
+    "auth",
+    "users",
 ]

@@ -1,239 +1,325 @@
 # backend/app/routers/pricing_settings.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select, and_, or_
 from typing import List, Optional
 from datetime import date
-from decimal import Decimal
 
 from app.db.database import get_db
-from app.models.pricing_settings import ServicePricingSettings
+from app.models.user import User
 from app.models.objects import Object
-from app.models.services import ServiceType, ResourceNorm, ResourceRate
+from app.models.services import ServiceType, ServiceRate
+from app.models.pricing_settings import ServicePricingSettings
+from app.models.services import ResourceNorm
 from app.schemas.pricing_settings import (
-    ServicePricingSettingsCreate,
-    ServicePricingSettingsUpdate,
-    ServicePricingSettingsResponse,
-    PriceCalculationRequest,
-    PriceCalculationResponse,
+    PricingSettingsCreate, PricingSettingsUpdate, PricingSettingsResponse,
+    PriceCalculationRequest, PriceCalculationResult
 )
+from app.core.security import require_authenticated, require_economist_or_higher
+from app.utils.audit_helper import log_action  # 🎯 ИМПОРТ
+from decimal import Decimal
 
 router = APIRouter(prefix="/pricing-settings", tags=["Настройки расчёта расценок"])
 
 
-async def _get_effective_settings(
-    db: AsyncSession,
-    service_type_id: int,
-    object_id: int,
-    target_date: date
-) -> tuple:
-    """Получает действующие настройки с учётом приоритета."""
-    # Приоритет 1: Для услуги + объекта
-    query = select(ServicePricingSettings).where(
-        ServicePricingSettings.service_type_id == service_type_id,
-        ServicePricingSettings.object_id == object_id,
-        ServicePricingSettings.valid_from <= target_date,
-        or_(ServicePricingSettings.valid_to.is_(None), ServicePricingSettings.valid_to >= target_date)
-    ).order_by(ServicePricingSettings.valid_from.desc())
-    result = await db.execute(query)
-    settings = result.scalars().first()
-    if settings:
-        return settings, "service+object"
-    
-    # Приоритет 2: Для услуги (все объекты)
-    query = select(ServicePricingSettings).where(
-        ServicePricingSettings.service_type_id == service_type_id,
-        ServicePricingSettings.object_id.is_(None),
-        ServicePricingSettings.valid_from <= target_date,
-        or_(ServicePricingSettings.valid_to.is_(None), ServicePricingSettings.valid_to >= target_date)
-    ).order_by(ServicePricingSettings.valid_from.desc())
-    result = await db.execute(query)
-    settings = result.scalars().first()
-    if settings:
-        return settings, "service"
-    
-    # Приоритет 3: Для объекта (все услуги)
-    query = select(ServicePricingSettings).where(
-        ServicePricingSettings.service_type_id.is_(None),
-        ServicePricingSettings.object_id == object_id,
-        ServicePricingSettings.valid_from <= target_date,
-        or_(ServicePricingSettings.valid_to.is_(None), ServicePricingSettings.valid_to >= target_date)
-    ).order_by(ServicePricingSettings.valid_from.desc())
-    result = await db.execute(query)
-    settings = result.scalars().first()
-    if settings:
-        return settings, "object"
-    
-    # Приоритет 4: Глобальные
-    query = select(ServicePricingSettings).where(
-        ServicePricingSettings.service_type_id.is_(None),
-        ServicePricingSettings.object_id.is_(None),
-        ServicePricingSettings.valid_from <= target_date,
-        or_(ServicePricingSettings.valid_to.is_(None), ServicePricingSettings.valid_to >= target_date)
-    ).order_by(ServicePricingSettings.valid_from.desc())
-    result = await db.execute(query)
-    settings = result.scalars().first()
-    if settings:
-        return settings, "global"
-    
-    # Если настроек нет, возвращаем нулевые
-    return ServicePricingSettings(overhead_percent=Decimal('0'), profit_percent=Decimal('0'), vat_percent=Decimal('0')), "none"
-
-
-async def _calculate_cost_price(
-    db: AsyncSession,
-    service_type_id: int,
-    target_date: date
-) -> Decimal:
-    """Рассчитывает себестоимость услуги на основе ресурсов и нормативов."""
-    norms_query = select(ResourceNorm).where(
-        ResourceNorm.service_type_id == service_type_id,
-        ResourceNorm.is_active == True,
-        ResourceNorm.valid_from <= target_date,
-        or_(ResourceNorm.valid_to.is_(None), ResourceNorm.valid_to >= target_date)
+@router.get("/", response_model=List[PricingSettingsResponse])
+async def get_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
+    result = await db.execute(
+        select(ServicePricingSettings)
+        .order_by(ServicePricingSettings.valid_from.desc())
     )
-    norms_result = await db.execute(norms_query)
-    norms = norms_result.scalars().all()
-    
-    if not norms:
-        return Decimal('0')
-    
-    total_cost = Decimal('0')
-    for norm in norms:
-        rate_query = select(ResourceRate).where(
-            ResourceRate.resource_id == norm.resource_id,
-            ResourceRate.valid_from <= target_date,
-            or_(ResourceRate.valid_to.is_(None), ResourceRate.valid_to >= target_date)
-        ).order_by(ResourceRate.valid_from.desc())
-        
-        rate_result = await db.execute(rate_query)
-        rate = rate_result.scalars().first()
-        
-        if rate:
-            total_cost += norm.quantity_per_unit * rate.price_per_unit
-    
-    return total_cost
-
-
-@router.get("/", response_model=List[ServicePricingSettingsResponse])
-async def get_pricing_settings(db: AsyncSession = Depends(get_db)):
-    query = select(ServicePricingSettings).options(
-        selectinload(ServicePricingSettings.object),
-        selectinload(ServicePricingSettings.service_type)
-    ).order_by(ServicePricingSettings.valid_from.desc(), ServicePricingSettings.object_id, ServicePricingSettings.service_type_id)
-    
-    result = await db.execute(query)
     settings_list = result.scalars().all()
-    
+
     response = []
     for s in settings_list:
-        response.append(ServicePricingSettingsResponse(
+        obj_name = None
+        svc_name = None
+        if s.object_id:
+            obj_res = await db.execute(select(Object).where(Object.id == s.object_id))
+            obj = obj_res.scalar_one_or_none()
+            obj_name = obj.name if obj else None
+        if s.service_type_id:
+            svc_res = await db.execute(select(ServiceType).where(ServiceType.id == s.service_type_id))
+            svc = svc_res.scalar_one_or_none()
+            svc_name = svc.name if svc else None
+
+        response.append(PricingSettingsResponse(
             id=s.id, object_id=s.object_id, service_type_id=s.service_type_id,
-            overhead_percent=s.overhead_percent, profit_percent=s.profit_percent, vat_percent=s.vat_percent,
+            overhead_percent=str(s.overhead_percent),
+            profit_percent=str(s.profit_percent),
+            vat_percent=str(s.vat_percent),
             valid_from=s.valid_from, valid_to=s.valid_to,
-            object_name=s.object.name if s.object else None,
-            service_name=s.service_type.name if s.service_type else None,
+            object_name=obj_name, service_name=svc_name
         ))
     return response
 
 
-@router.post("/", response_model=ServicePricingSettingsResponse, status_code=status.HTTP_201_CREATED)
-async def create_pricing_settings(settings_in: ServicePricingSettingsCreate, db: AsyncSession = Depends(get_db)):
-    if settings_in.object_id:
-        if not (await db.execute(select(Object).where(Object.id == settings_in.object_id))).scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Объект не найден")
-    
-    if settings_in.service_type_id:
-        if not (await db.execute(select(ServiceType).where(ServiceType.id == settings_in.service_type_id))).scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Услуга не найдена")
-    
-    overlap_filter = and_(
-        ServicePricingSettings.object_id == settings_in.object_id,
-        ServicePricingSettings.service_type_id == settings_in.service_type_id,
-        ServicePricingSettings.valid_from <= settings_in.valid_from,
-        or_(ServicePricingSettings.valid_to.is_(None), ServicePricingSettings.valid_to >= settings_in.valid_from)
-    )
-    if settings_in.valid_to:
-        overlap_filter = and_(overlap_filter, settings_in.valid_to >= ServicePricingSettings.valid_from)
-    
-    if (await db.execute(select(ServicePricingSettings).where(overlap_filter))).scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Настройки на этот период для данной комбинации уже существуют")
-    
-    db_settings = ServicePricingSettings(**settings_in.model_dump())
-    db.add(db_settings)
+@router.post("/", response_model=PricingSettingsResponse, status_code=status.HTTP_201_CREATED)
+async def create_settings(
+    request: Request,  # 🎯 Для IP
+    item: PricingSettingsCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
+    db_item = ServicePricingSettings(**item.model_dump())
+    db.add(db_item)
     await db.commit()
-    await db.refresh(db_settings, attribute_names=['object', 'service_type'])
-    
-    return ServicePricingSettingsResponse(
-        id=db_settings.id, object_id=db_settings.object_id, service_type_id=db_settings.service_type_id,
-        overhead_percent=db_settings.overhead_percent, profit_percent=db_settings.profit_percent, vat_percent=db_settings.vat_percent,
-        valid_from=db_settings.valid_from, valid_to=db_settings.valid_to,
-        object_name=db_settings.object.name if db_settings.object else None,
-        service_name=db_settings.service_type.name if db_settings.service_type else None,
+    await db.refresh(db_item)
+
+    obj_name = None
+    svc_name = None
+    if db_item.object_id:
+        obj_res = await db.execute(select(Object).where(Object.id == db_item.object_id))
+        obj = obj_res.scalar_one_or_none()
+        obj_name = obj.name if obj else None
+    if db_item.service_type_id:
+        svc_res = await db.execute(select(ServiceType).where(ServiceType.id == db_item.service_type_id))
+        svc = svc_res.scalar_one_or_none()
+        svc_name = svc.name if svc else None
+
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ НАСТРОЕК
+    await log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        resource_type="PRICING_SETTINGS",
+        resource_id=db_item.id,
+        new_values={
+            "object_name": obj_name or "Глобально",
+            "service_name": svc_name or "Все услуги",
+            "overhead_percent": str(db_item.overhead_percent),
+            "profit_percent": str(db_item.profit_percent),
+            "vat_percent": str(db_item.vat_percent),
+            "valid_from": str(db_item.valid_from),
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
+    return PricingSettingsResponse(
+        id=db_item.id, object_id=db_item.object_id, service_type_id=db_item.service_type_id,
+        overhead_percent=str(db_item.overhead_percent),
+        profit_percent=str(db_item.profit_percent),
+        vat_percent=str(db_item.vat_percent),
+        valid_from=db_item.valid_from, valid_to=db_item.valid_to,
+        object_name=obj_name, service_name=svc_name
     )
 
 
-@router.patch("/{settings_id}", response_model=ServicePricingSettingsResponse)
-async def update_pricing_settings(settings_id: int, settings_in: ServicePricingSettingsUpdate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ServicePricingSettings).where(ServicePricingSettings.id == settings_id))
-    settings = result.scalar_one_or_none()
-    if not settings:
+@router.patch("/{item_id}", response_model=PricingSettingsResponse)
+async def update_settings(
+    request: Request,  # 🎯 Для IP
+    item_id: int,
+    item_in: PricingSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
+    result = await db.execute(select(ServicePricingSettings).where(ServicePricingSettings.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
         raise HTTPException(status_code=404, detail="Настройки не найдены")
-    
-    for field, value in settings_in.model_dump(exclude_unset=True).items():
-        setattr(settings, field, value)
-    
+
+    # 🎯 Сохраняем старые значения
+    old_values = {
+        "overhead_percent": str(item.overhead_percent),
+        "profit_percent": str(item.profit_percent),
+        "vat_percent": str(item.vat_percent),
+        "valid_from": str(item.valid_from),
+        "valid_to": str(item.valid_to) if item.valid_to else None,
+    }
+
+    for field, value in item_in.model_dump(exclude_unset=True).items():
+        setattr(item, field, value)
+
     await db.commit()
-    await db.refresh(settings, attribute_names=['object', 'service_type'])
-    
-    return ServicePricingSettingsResponse(
-        id=settings.id, object_id=settings.object_id, service_type_id=settings.service_type_id,
-        overhead_percent=settings.overhead_percent, profit_percent=settings.profit_percent, vat_percent=settings.vat_percent,
-        valid_from=settings.valid_from, valid_to=settings.valid_to,
-        object_name=settings.object.name if settings.object else None,
-        service_name=settings.service_type.name if settings.service_type else None,
+    await db.refresh(item)
+
+    obj_name = None
+    svc_name = None
+    if item.object_id:
+        obj_res = await db.execute(select(Object).where(Object.id == item.object_id))
+        obj = obj_res.scalar_one_or_none()
+        obj_name = obj.name if obj else None
+    if item.service_type_id:
+        svc_res = await db.execute(select(ServiceType).where(ServiceType.id == item.service_type_id))
+        svc = svc_res.scalar_one_or_none()
+        svc_name = svc.name if svc else None
+
+    # 🎯 ЛОГИРОВАНИЕ ОБНОВЛЕНИЯ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="UPDATE",
+        resource_type="PRICING_SETTINGS",
+        resource_id=item_id,
+        old_values=old_values,
+        new_values={
+            "overhead_percent": str(item.overhead_percent),
+            "profit_percent": str(item.profit_percent),
+            "vat_percent": str(item.vat_percent),
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
+    return PricingSettingsResponse(
+        id=item.id, object_id=item.object_id, service_type_id=item.service_type_id,
+        overhead_percent=str(item.overhead_percent),
+        profit_percent=str(item.profit_percent),
+        vat_percent=str(item.vat_percent),
+        valid_from=item.valid_from, valid_to=item.valid_to,
+        object_name=obj_name, service_name=svc_name
     )
 
 
-@router.delete("/{settings_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_pricing_settings(settings_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ServicePricingSettings).where(ServicePricingSettings.id == settings_id))
-    settings = result.scalar_one_or_none()
-    if not settings:
+@router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_settings(
+    request: Request,  # 🎯 Для IP
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
+    result = await db.execute(select(ServicePricingSettings).where(ServicePricingSettings.id == item_id))
+    item = result.scalar_one_or_none()
+    if not item:
         raise HTTPException(status_code=404, detail="Настройки не найдены")
-    
-    await db.delete(settings)
+
+    deleted_data = {
+        "overhead_percent": str(item.overhead_percent),
+        "profit_percent": str(item.profit_percent),
+        "vat_percent": str(item.vat_percent),
+    }
+
+    await db.delete(item)
     await db.commit()
+
+    # 🎯 ЛОГИРОВАНИЕ УДАЛЕНИЯ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="DELETE",
+        resource_type="PRICING_SETTINGS",
+        resource_id=item_id,
+        old_values=deleted_data,
+        ip_address=request.client.host if request.client else None
+    )
     return None
 
 
-@router.post("/calculate", response_model=PriceCalculationResponse)
-async def calculate_price(request: PriceCalculationRequest, db: AsyncSession = Depends(get_db)):
-    service = (await db.execute(select(ServiceType).where(ServiceType.id == request.service_type_id))).scalar_one_or_none()
-    if not service:
-        raise HTTPException(status_code=404, detail="Услуга не найдена")
-    
-    obj = (await db.execute(select(Object).where(Object.id == request.object_id))).scalar_one_or_none()
-    if not obj:
-        raise HTTPException(status_code=404, detail="Объект не найден")
-    
-    cost_price = await _calculate_cost_price(db, request.service_type_id, request.target_date)
-    settings, source = await _get_effective_settings(db, request.service_type_id, request.object_id, request.target_date)
-    
-    overhead_amount = cost_price * (settings.overhead_percent / Decimal('100'))
-    price_with_overhead = cost_price + overhead_amount
-    
-    profit_amount = price_with_overhead * (settings.profit_percent / Decimal('100'))
-    price_with_profit = price_with_overhead + profit_amount
-    
-    vat_amount = price_with_profit * (settings.vat_percent / Decimal('100'))
-    final_price = price_with_profit + vat_amount
-    
-    return PriceCalculationResponse(
-        service_name=service.name, object_name=obj.name,
-        cost_price=round(cost_price, 2), overhead_amount=round(overhead_amount, 2),
-        profit_amount=round(profit_amount, 2), vat_amount=round(vat_amount, 2), final_price=round(final_price, 2),
-        overhead_percent=settings.overhead_percent, profit_percent=settings.profit_percent, vat_percent=settings.vat_percent,
-        settings_source=source,
+async def _find_applicable_settings(
+    db: AsyncSession, service_type_id: int, object_id: int, target_date: date
+) -> Optional[ServicePricingSettings]:
+    """Находит настройки по приоритету: услуга+объект → услуга → объект → глобальные."""
+    # 1. Услуга + Объект
+    res = await db.execute(select(ServicePricingSettings).where(
+        and_(
+            ServicePricingSettings.service_type_id == service_type_id,
+            ServicePricingSettings.object_id == object_id,
+            ServicePricingSettings.valid_from <= target_date,
+            or_(ServicePricingSettings.valid_to >= target_date, ServicePricingSettings.valid_to == None)
+        )
+    ))
+    s = res.scalar_one_or_none()
+    if s: return s
+
+    # 2. Только услуга
+    res = await db.execute(select(ServicePricingSettings).where(
+        and_(
+            ServicePricingSettings.service_type_id == service_type_id,
+            ServicePricingSettings.object_id == None,
+            ServicePricingSettings.valid_from <= target_date,
+            or_(ServicePricingSettings.valid_to >= target_date, ServicePricingSettings.valid_to == None)
+        )
+    ))
+    s = res.scalar_one_or_none()
+    if s: return s
+
+    # 3. Только объект
+    res = await db.execute(select(ServicePricingSettings).where(
+        and_(
+            ServicePricingSettings.service_type_id == None,
+            ServicePricingSettings.object_id == object_id,
+            ServicePricingSettings.valid_from <= target_date,
+            or_(ServicePricingSettings.valid_to >= target_date, ServicePricingSettings.valid_to == None)
+        )
+    ))
+    s = res.scalar_one_or_none()
+    if s: return s
+
+    # 4. Глобальные
+    res = await db.execute(select(ServicePricingSettings).where(
+        and_(
+            ServicePricingSettings.service_type_id == None,
+            ServicePricingSettings.object_id == None,
+            ServicePricingSettings.valid_from <= target_date,
+            or_(ServicePricingSettings.valid_to >= target_date, ServicePricingSettings.valid_to == None)
+        )
+    ))
+    return res.scalar_one_or_none()
+
+
+@router.post("/calculate", response_model=PriceCalculationResult)
+async def calculate_price(
+    req: PriceCalculationRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
+    # Получаем нормативы для услуги
+    norms_res = await db.execute(
+        select(ResourceNorm).where(ResourceNorm.service_type_id == req.service_type_id)
+    )
+    norms = norms_res.scalars().all()
+
+    cost_price = Decimal("0")
+    for norm in norms:
+        from app.models.resources import ResourceRate
+        rates_res = await db.execute(
+            select(ResourceRate).where(
+                and_(
+                    ResourceRate.resource_id == norm.resource_id,
+                    ResourceRate.valid_from <= req.target_date,
+                    or_(ResourceRate.valid_to >= req.target_date, ResourceRate.valid_to == None)
+                )
+            ).order_by(ResourceRate.valid_from.desc())
+        )
+        rate = rates_res.scalars().first()
+        if rate:
+            cost_price += Decimal(str(norm.quantity_per_unit)) * Decimal(str(rate.price_per_unit))
+
+    # Находим настройки
+    settings_obj = await _find_applicable_settings(db, req.service_type_id, req.object_id, req.target_date)
+
+    if settings_obj:
+        overhead_pct = Decimal(str(settings_obj.overhead_percent)) / Decimal("100")
+        profit_pct = Decimal(str(settings_obj.profit_percent)) / Decimal("100")
+        vat_pct = Decimal(str(settings_obj.vat_percent)) / Decimal("100")
+        source = "service+object" if (settings_obj.service_type_id and settings_obj.object_id) else \
+                 "service" if settings_obj.service_type_id else \
+                 "object" if settings_obj.object_id else "global"
+    else:
+        overhead_pct = profit_pct = vat_pct = Decimal("0")
+        source = "none"
+
+    with_overhead = cost_price * (Decimal("1") + overhead_pct)
+    with_profit = with_overhead * (Decimal("1") + profit_pct)
+    with_vat = with_profit * (Decimal("1") + vat_pct)
+
+    svc_res = await db.execute(select(ServiceType).where(ServiceType.id == req.service_type_id))
+    svc = svc_res.scalar_one_or_none()
+    obj_res = await db.execute(select(Object).where(Object.id == req.object_id))
+    obj = obj_res.scalar_one_or_none()
+
+    return PriceCalculationResult(
+        service_name=svc.name if svc else "Неизвестно",
+        object_name=obj.name if obj else "Неизвестно",
+        cost_price=str(cost_price),
+        overhead_amount=str(with_overhead - cost_price),
+        profit_amount=str(with_profit - with_overhead),
+        vat_amount=str(with_vat - with_profit),
+        final_price=str(with_vat),
+        overhead_percent=str(settings_obj.overhead_percent) if settings_obj else "0",
+        profit_percent=str(settings_obj.profit_percent) if settings_obj else "0",
+        vat_percent=str(settings_obj.vat_percent) if settings_obj else "0",
+        settings_source=source
     )

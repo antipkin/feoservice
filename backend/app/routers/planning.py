@@ -1,6 +1,6 @@
 # backend/app/routers/planning.py
 import urllib.parse
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func, and_, or_
@@ -14,6 +14,7 @@ from app.models.planning import PlanHeader, PlanItem, PlanResource, PlanMonthly
 from app.models.objects import Object
 from app.models.services import ServiceType, ServiceRate, Resource, ResourceRate, ResourceNorm
 from app.models.service_category import ServiceCategory
+from app.models.user import User
 from app.schemas.plan import (
     PlanHeaderCreate, PlanHeaderUpdate, PlanHeaderResponse,
     PlanItemWithMonthlyCreate, PlanItemUpdate, PlanItemWithMonthlyResponse,
@@ -21,6 +22,11 @@ from app.schemas.plan import (
 )
 from app.models.enums import PlanStatus
 from app.utils.export import export_plan_to_excel, export_plan_to_pdf
+from app.core.security import (
+    require_authenticated,
+    require_economist_or_higher,
+)
+from app.utils.audit_helper import log_action  # 🎯 ИМПОРТ ЛОГИРОВАНИЯ
 
 router = APIRouter(prefix="/plans", tags=["Планирование"])
 
@@ -35,10 +41,7 @@ async def _get_rate_for_month(
     year: int,
     month: int
 ) -> Optional[ServiceRate]:
-    """Ищет актуальную расценку для конкретного месяца. Сначала для объекта, потом глобальную."""
     target_date = date(year, month, 1)
-
-    # 1. Ищем расценку для конкретного объекта
     query = select(ServiceRate).where(
         ServiceRate.service_type_id == service_type_id,
         ServiceRate.object_id == object_id,
@@ -47,8 +50,6 @@ async def _get_rate_for_month(
     ).order_by(ServiceRate.valid_from.desc())
     result = await db.execute(query)
     rate = result.scalars().first()
-
-    # 2. Если не нашли, ищем глобальную расценку (object_id is None)
     if not rate:
         query = select(ServiceRate).where(
             ServiceRate.service_type_id == service_type_id,
@@ -58,15 +59,80 @@ async def _get_rate_for_month(
         ).order_by(ServiceRate.valid_from.desc())
         result = await db.execute(query)
         rate = result.scalars().first()
-
     return rate
+
+
+# ============================================================
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: СОЗДАНИЕ РЕСУРСОВ ПЛАНА
+# ============================================================
+async def _create_plan_resources(
+    db: AsyncSession,
+    plan_item_id: int,
+    service_type_id: int,
+    total_quantity: Decimal
+):
+    """Создаёт записи PlanResource на основе нормативов."""
+    norm_query = select(ResourceNorm).where(
+        ResourceNorm.service_type_id == service_type_id,
+        ResourceNorm.is_active == True,
+        ResourceNorm.valid_from <= func.current_date(),
+        or_(ResourceNorm.valid_to.is_(None), ResourceNorm.valid_to >= func.current_date())
+    )
+    norms_result = await db.execute(norm_query)
+    for norm in norms_result.scalars().all():
+        res_rate = (await db.execute(select(ResourceRate).where(
+            ResourceRate.resource_id == norm.resource_id,
+            ResourceRate.valid_from <= func.current_date(),
+            or_(ResourceRate.valid_to.is_(None), ResourceRate.valid_to >= func.current_date())
+        ).order_by(ResourceRate.valid_from.desc()))).scalars().first()
+        res_price = res_rate.price_per_unit if res_rate else Decimal('0')
+        req_quantity = total_quantity * norm.quantity_per_unit
+        db.add(PlanResource(
+            plan_item_id=plan_item_id,
+            resource_id=norm.resource_id,
+            required_quantity=req_quantity,
+            unit_price=res_price,
+            total_amount=req_quantity * res_price
+        ))
+
+
+# ============================================================
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: ПОСТРОЕНИЕ ОТВЕТА
+# ============================================================
+def _build_item_response(item: PlanItem) -> dict:
+    return {
+        "id": item.id,
+        "plan_header_id": item.plan_header_id,
+        "service_type_id": item.service_type_id,
+        "total_quantity": str(item.total_quantity),
+        "total_amount": str(item.total_amount),
+        "frequency": item.frequency,
+        "description": item.description,
+        "monthly": [
+            {
+                "id": m.id,
+                "plan_item_id": m.plan_item_id,
+                "month": m.month,
+                "year": m.year,
+                "quantity": str(m.quantity),
+                "unit_price": str(m.unit_price),
+                "amount": str(m.amount) if m.amount else "0"
+            }
+            for m in sorted(item.monthly, key=lambda x: (x.year, x.month))
+        ]
+    }
 
 
 # ============================================================
 # CRUD ПЛАНОВ
 # ============================================================
 @router.post("/", response_model=PlanHeaderResponse, status_code=status.HTTP_201_CREATED)
-async def create_plan(plan_in: PlanHeaderCreate, db: AsyncSession = Depends(get_db)):
+async def create_plan(
+    request: Request,  # 🎯 Для IP
+    plan_in: PlanHeaderCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     obj = await db.execute(select(Object).where(Object.id == plan_in.object_id))
     if not obj.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Объект не найден")
@@ -75,6 +141,24 @@ async def create_plan(plan_in: PlanHeaderCreate, db: AsyncSession = Depends(get_
     db.add(db_plan)
     await db.commit()
     await db.refresh(db_plan)
+
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ ПЛАНА
+    await log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        resource_type="PLAN",
+        resource_id=db_plan.id,
+        new_values={
+            "name": db_plan.name,
+            "object_id": db_plan.object_id,
+            "start_year": db_plan.start_year,
+            "start_month": db_plan.start_month,
+            "period_months": db_plan.period_months,
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return db_plan
 
 
@@ -82,7 +166,8 @@ async def create_plan(plan_in: PlanHeaderCreate, db: AsyncSession = Depends(get_
 async def get_plans(
     object_id: Optional[int] = None,
     year: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
 ):
     query = select(PlanHeader)
     if object_id:
@@ -94,7 +179,11 @@ async def get_plans(
 
 
 @router.get("/{plan_id}", response_model=PlanHeaderResponse)
-async def get_plan(plan_id: int, db: AsyncSession = Depends(get_db)):
+async def get_plan(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
     result = await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))
     plan = result.scalar_one_or_none()
     if not plan:
@@ -103,20 +192,44 @@ async def get_plan(plan_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_plan(plan_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_plan(
+    request: Request,  # 🎯 Для IP
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     result = await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))
     plan = result.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
-
     if plan.status != PlanStatus.DRAFT:
         raise HTTPException(
             status_code=400,
             detail="Нельзя удалить утверждённый или архивный план. Сначала переведите его в статус 'draft'."
         )
 
+    deleted_data = {
+        "name": plan.name,
+        "object_id": plan.object_id,
+        "start_year": plan.start_year,
+        "start_month": plan.start_month,
+        "period_months": plan.period_months,
+    }
+
     await db.delete(plan)
     await db.commit()
+
+    # 🎯 ЛОГИРОВАНИЕ УДАЛЕНИЯ ПЛАНА
+    await log_action(
+        db=db,
+        user=current_user,
+        action="DELETE",
+        resource_type="PLAN",
+        resource_id=plan_id,
+        old_values=deleted_data,
+        ip_address=request.client.host if request.client else None
+    )
+
     return None
 
 
@@ -125,9 +238,11 @@ async def delete_plan(plan_id: int, db: AsyncSession = Depends(get_db)):
 # ============================================================
 @router.post("/{plan_id}/copy", response_model=PlanHeaderResponse, status_code=status.HTTP_201_CREATED)
 async def copy_plan(
+    request: Request,  # 🎯 Для IP
     plan_id: int,
     copy_request: PlanCopyRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
 ):
     result = await db.execute(
         select(PlanHeader)
@@ -166,30 +281,24 @@ async def copy_plan(
 
         total_quantity = Decimal('0')
         total_amount = Decimal('0')
-
         for source_monthly in source_item.monthly:
             old_month_index = (source_monthly.year - source_plan.start_year) * 12 + (source_monthly.month - source_plan.start_month)
             if old_month_index < 0 or old_month_index >= copy_request.new_period_months:
                 continue
-
             new_month = copy_request.new_start_month + old_month_index
             new_year = copy_request.new_start_year
             while new_month > 12:
                 new_month -= 12
                 new_year += 1
 
-            # Ищем расценку именно для этого нового месяца и объекта
             rate = await _get_rate_for_month(db, source_item.service_type_id, copy_request.new_object_id, new_year, new_month)
-
             if rate:
                 new_unit_price = rate.price_per_unit * inflation_multiplier
             else:
                 new_unit_price = Decimal('0')
-
             month_amount = source_monthly.quantity * new_unit_price
             total_quantity += source_monthly.quantity
             total_amount += month_amount
-
             db.add(PlanMonthly(
                 plan_item_id=new_item.id,
                 month=new_month,
@@ -202,7 +311,6 @@ async def copy_plan(
         new_item.total_quantity = total_quantity
         new_item.total_amount = total_amount
 
-        # Ресурсы (агрегируем по итоговому количеству)
         norm_query = select(ResourceNorm).where(
             ResourceNorm.service_type_id == source_item.service_type_id,
             ResourceNorm.is_active == True,
@@ -218,7 +326,6 @@ async def copy_plan(
             ).order_by(ResourceRate.valid_from.desc())
             res_rate = (await db.execute(res_rate_query)).scalars().first()
             res_price = res_rate.price_per_unit if res_rate else Decimal('0')
-
             db.add(PlanResource(
                 plan_item_id=new_item.id,
                 resource_id=norm.resource_id,
@@ -229,23 +336,39 @@ async def copy_plan(
 
     await db.commit()
     await db.refresh(new_plan)
+
+    # 🎯 ЛОГИРОВАНИЕ КОПИРОВАНИЯ ПЛАНА
+    await log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        resource_type="PLAN",
+        resource_id=new_plan.id,
+        new_values={
+            "name": new_plan.name,
+            "object_id": new_plan.object_id,
+            "copied_from_plan_id": plan_id,
+            "inflation_percent": str(copy_request.inflation_percent),
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return new_plan
 
 
 # ============================================================
-# 🆕 ЭНДПОИНТ ДЛЯ ПОЛУЧЕНИЯ РАСЦЕНОК ПО МЕСЯЦАМ
+# ПОЛУЧЕНИЕ РАСЦЕНОК ПО МЕСЯЦАМ
 # ============================================================
 @router.get("/{plan_id}/services/{service_type_id}/rates")
 async def get_service_rates_for_plan(
     plan_id: int,
     service_type_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
 ):
-    """Возвращает актуальные расценки для услуги по каждому месяцу периода плана."""
     plan = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
-
     rates_data = []
     for i in range(plan.period_months):
         m = plan.start_month + i
@@ -253,14 +376,12 @@ async def get_service_rates_for_plan(
         while m > 12:
             m -= 12
             y += 1
-
         rate = await _get_rate_for_month(db, service_type_id, plan.object_id, y, m)
         rates_data.append({
             "month": m,
             "year": y,
             "unit_price": str(rate.price_per_unit) if rate else "0"
         })
-
     return rates_data
 
 
@@ -268,7 +389,13 @@ async def get_service_rates_for_plan(
 # CRUD ПОЗИЦИЙ ПЛАНА
 # ============================================================
 @router.post("/{plan_id}/items", response_model=PlanItemWithMonthlyResponse, status_code=status.HTTP_201_CREATED)
-async def add_plan_item(plan_id: int, item_in: PlanItemWithMonthlyCreate, db: AsyncSession = Depends(get_db)):
+async def add_plan_item(
+    request: Request,  # 🎯 Для IP
+    plan_id: int,
+    item_in: PlanItemWithMonthlyCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     plan = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
@@ -277,7 +404,6 @@ async def add_plan_item(plan_id: int, item_in: PlanItemWithMonthlyCreate, db: As
 
     total_quantity = Decimal('0')
     total_amount = Decimal('0')
-
     db_item = PlanItem(
         plan_header_id=plan_id,
         service_type_id=item_in.service_type_id,
@@ -293,7 +419,6 @@ async def add_plan_item(plan_id: int, item_in: PlanItemWithMonthlyCreate, db: As
         month_amount = month_data.quantity * month_data.unit_price
         total_quantity += month_data.quantity
         total_amount += month_amount
-
         db.add(PlanMonthly(
             plan_item_id=db_item.id,
             month=month_data.month,
@@ -306,22 +431,40 @@ async def add_plan_item(plan_id: int, item_in: PlanItemWithMonthlyCreate, db: As
     db_item.total_quantity = total_quantity
     db_item.total_amount = total_amount
     await db.flush()
-
     await _create_plan_resources(db, db_item.id, item_in.service_type_id, total_quantity)
     await db.commit()
 
     result = await db.execute(
         select(PlanItem).options(selectinload(PlanItem.monthly)).where(PlanItem.id == db_item.id)
     )
+
+    # 🎯 ЛОГИРОВАНИЕ ДОБАВЛЕНИЯ ПОЗИЦИИ В ПЛАН
+    await log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        resource_type="PLAN_ITEM",
+        resource_id=db_item.id,
+        new_values={
+            "plan_id": plan_id,
+            "service_type_id": db_item.service_type_id,
+            "total_quantity": str(db_item.total_quantity),
+            "total_amount": str(db_item.total_amount),
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return _build_item_response(result.scalar_one())
 
 
 @router.patch("/{plan_id}/items/{item_id}", response_model=PlanItemWithMonthlyResponse)
 async def update_plan_item(
+    request: Request,  # 🎯 Для IP
     plan_id: int,
     item_id: int,
     item_in: PlanItemUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
 ):
     plan = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan or plan.status != PlanStatus.DRAFT:
@@ -331,18 +474,23 @@ async def update_plan_item(
     if not db_item:
         raise HTTPException(status_code=404, detail="Позиция не найдена")
 
+    # 🎯 Сохраняем старые значения
+    old_values = {
+        "service_type_id": db_item.service_type_id,
+        "total_quantity": str(db_item.total_quantity),
+        "total_amount": str(db_item.total_amount),
+    }
+
     await db.execute(delete(PlanMonthly).where(PlanMonthly.plan_item_id == item_id))
     await db.execute(delete(PlanResource).where(PlanResource.plan_item_id == item_id))
     await db.flush()
 
     total_quantity = Decimal('0')
     total_amount = Decimal('0')
-
     for month_data in item_in.monthly_data:
         month_amount = month_data.quantity * month_data.unit_price
         total_quantity += month_data.quantity
         total_amount += month_amount
-
         db.add(PlanMonthly(
             plan_item_id=item_id,
             month=month_data.month,
@@ -358,21 +506,39 @@ async def update_plan_item(
     db_item.frequency = item_in.frequency
     db_item.description = item_in.description
     await db.flush()
-
     await _create_plan_resources(db, item_id, item_in.service_type_id, total_quantity)
     await db.commit()
 
     result = await db.execute(
         select(PlanItem).options(selectinload(PlanItem.monthly)).where(PlanItem.id == item_id)
     )
+
+    # 🎯 ЛОГИРОВАНИЕ ОБНОВЛЕНИЯ ПОЗИЦИИ ПЛАНА
+    await log_action(
+        db=db,
+        user=current_user,
+        action="UPDATE",
+        resource_type="PLAN_ITEM",
+        resource_id=item_id,
+        old_values=old_values,
+        new_values={
+            "service_type_id": db_item.service_type_id,
+            "total_quantity": str(db_item.total_quantity),
+            "total_amount": str(db_item.total_amount),
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return _build_item_response(result.scalar_one())
 
 
 @router.delete("/{plan_id}/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_plan_item(
+    request: Request,  # 🎯 Для IP
     plan_id: int,
     item_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
 ):
     plan = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan or plan.status != PlanStatus.DRAFT:
@@ -384,69 +550,36 @@ async def delete_plan_item(
     if not item:
         raise HTTPException(status_code=404, detail="Позиция не найдена")
 
-    await db.delete(item)
-    await db.commit()
-    return None
-
-
-async def _create_plan_resources(
-    db: AsyncSession,
-    plan_item_id: int,
-    service_type_id: int,
-    total_quantity: Decimal
-):
-    norm_query = select(ResourceNorm).where(
-        ResourceNorm.service_type_id == service_type_id,
-        ResourceNorm.is_active == True,
-        ResourceNorm.valid_from <= func.current_date(),
-        or_(ResourceNorm.valid_to.is_(None), ResourceNorm.valid_to >= func.current_date())
-    )
-    norms_result = await db.execute(norm_query)
-    for norm in norms_result.scalars().all():
-        res_rate = (await db.execute(select(ResourceRate).where(
-            ResourceRate.resource_id == norm.resource_id,
-            ResourceRate.valid_from <= func.current_date(),
-            or_(ResourceRate.valid_to.is_(None), ResourceRate.valid_to >= func.current_date())
-        ).order_by(ResourceRate.valid_from.desc()))).scalars().first()
-
-        res_price = res_rate.price_per_unit if res_rate else Decimal('0')
-        req_quantity = total_quantity * norm.quantity_per_unit
-
-        db.add(PlanResource(
-            plan_item_id=plan_item_id,
-            resource_id=norm.resource_id,
-            required_quantity=req_quantity,
-            unit_price=res_price,
-            total_amount=req_quantity * res_price
-        ))
-
-
-def _build_item_response(item: PlanItem) -> dict:
-    return {
-        "id": item.id,
-        "plan_header_id": item.plan_header_id,
+    deleted_data = {
+        "plan_id": plan_id,
         "service_type_id": item.service_type_id,
         "total_quantity": str(item.total_quantity),
         "total_amount": str(item.total_amount),
-        "frequency": item.frequency,
-        "description": item.description,
-        "monthly": [
-            {
-                "id": m.id,
-                "plan_item_id": m.plan_item_id,
-                "month": m.month,
-                "year": m.year,
-                "quantity": str(m.quantity),
-                "unit_price": str(m.unit_price),
-                "amount": str(m.amount) if m.amount else "0"
-            }
-            for m in sorted(item.monthly, key=lambda x: (x.year, x.month))
-        ]
     }
+
+    await db.delete(item)
+    await db.commit()
+
+    # 🎯 ЛОГИРОВАНИЕ УДАЛЕНИЯ ПОЗИЦИИ ПЛАНА
+    await log_action(
+        db=db,
+        user=current_user,
+        action="DELETE",
+        resource_type="PLAN_ITEM",
+        resource_id=item_id,
+        old_values=deleted_data,
+        ip_address=request.client.host if request.client else None
+    )
+
+    return None
 
 
 @router.get("/{plan_id}/items", response_model=List[PlanItemWithMonthlyResponse])
-async def get_plan_items(plan_id: int, db: AsyncSession = Depends(get_db)):
+async def get_plan_items(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
     items = (await db.execute(
         select(PlanItem).options(selectinload(PlanItem.monthly)).where(PlanItem.plan_header_id == plan_id)
     )).scalars().all()
@@ -454,20 +587,22 @@ async def get_plan_items(plan_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{plan_id}/tariff", response_model=TariffCalculationResponse)
-async def calculate_tariff(plan_id: int, db: AsyncSession = Depends(get_db)):
+async def calculate_tariff(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
     plan = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
-
     obj = (await db.execute(select(Object).where(Object.id == plan.object_id))).scalar_one()
+
     total_services = (await db.execute(
         select(func.sum(PlanItem.total_amount)).where(PlanItem.plan_header_id == plan_id)
     )).scalar() or Decimal('0')
-
     total_resources = (await db.execute(
         select(func.sum(PlanResource.total_amount)).join(PlanItem).where(PlanItem.plan_header_id == plan_id)
     )).scalar() or Decimal('0')
-
     grand_total = total_services + total_resources
 
     tariff_base = obj.tariff_base or "area"
@@ -495,11 +630,15 @@ async def calculate_tariff(plan_id: int, db: AsyncSession = Depends(get_db)):
 
 
 # ============================================================
-# 🆕 МАССОВЫЙ ПЕРЕСЧЁТ РАСЦЕНОК В ПЛАНЕ
+# МАССОВЫЙ ПЕРЕСЧЁТ РАСЦЕНОК В ПЛАНЕ
 # ============================================================
 @router.post("/{plan_id}/recalculate-rates", response_model=PlanHeaderResponse)
-async def recalculate_plan_rates(plan_id: int, db: AsyncSession = Depends(get_db)):
-    """Обновляет unit_price во всех месяцах плана на основе актуальных расценок."""
+async def recalculate_plan_rates(
+    request: Request,  # 🎯 Для IP
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     plan = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
@@ -513,24 +652,30 @@ async def recalculate_plan_rates(plan_id: int, db: AsyncSession = Depends(get_db
     for item in items:
         item_total_amount = Decimal('0')
         item_total_quantity = Decimal('0')
-
         for monthly in item.monthly:
             rate = await _get_rate_for_month(db, item.service_type_id, plan.object_id, monthly.year, monthly.month)
             if rate:
                 new_price = rate.price_per_unit
                 monthly.unit_price = new_price
                 monthly.amount = monthly.quantity * new_price
-
             item_total_quantity += monthly.quantity
             item_total_amount += monthly.amount
-
-        # Обновляем итоги по позиции
         item.total_quantity = item_total_quantity
         item.total_amount = item_total_amount
 
     await db.commit()
 
-    # Возвращаем обновленный план
+    # 🎯 ЛОГИРОВАНИЕ ПЕРЕСЧЁТА РАСЦЕНОК
+    await log_action(
+        db=db,
+        user=current_user,
+        action="UPDATE",
+        resource_type="PLAN",
+        resource_id=plan_id,
+        new_values={"action": "recalculate_rates", "plan_name": plan.name},
+        ip_address=request.client.host if request.client else None
+    )
+
     return (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one()
 
 
@@ -538,11 +683,14 @@ async def recalculate_plan_rates(plan_id: int, db: AsyncSession = Depends(get_db
 # ЭКСПОРТ ПЛАНА
 # ============================================================
 @router.get("/{plan_id}/export/excel")
-async def export_plan_excel(plan_id: int, db: AsyncSession = Depends(get_db)):
+async def export_plan_excel(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
     plan_obj = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan_obj:
         raise HTTPException(status_code=404, detail="План не найден")
-
     obj_data = (await db.execute(select(Object).where(Object.id == plan_obj.object_id))).scalar_one()
     plan_items = (await db.execute(
         select(PlanItem).options(selectinload(PlanItem.monthly)).where(PlanItem.plan_header_id == plan_id)
@@ -579,16 +727,22 @@ async def export_plan_excel(plan_id: int, db: AsyncSession = Depends(get_db)):
         items_data, categories,
         {"object_name": obj_data.name, "tariff_unit": tariff_unit, "tariff_per_unit": str(round(grand_total / divisor if divisor > 0 else 0, 2)), "grand_total": str(grand_total)}
     )
-
-    return StreamingResponse(file_buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(f'plan_{plan_obj.name}_{plan_obj.start_year}.xlsx')}"})
+    return StreamingResponse(
+        file_buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(f'plan_{plan_obj.name}_{plan_obj.start_year}.xlsx')}"}
+    )
 
 
 @router.get("/{plan_id}/export/pdf")
-async def export_plan_pdf(plan_id: int, db: AsyncSession = Depends(get_db)):
+async def export_plan_pdf(
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
     plan_obj = (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one_or_none()
     if not plan_obj:
         raise HTTPException(status_code=404, detail="План не найден")
-
     obj_data = (await db.execute(select(Object).where(Object.id == plan_obj.object_id))).scalar_one()
     plan_items = (await db.execute(
         select(PlanItem).options(selectinload(PlanItem.monthly)).where(PlanItem.plan_header_id == plan_id)
@@ -625,5 +779,8 @@ async def export_plan_pdf(plan_id: int, db: AsyncSession = Depends(get_db)):
         items_data, categories,
         {"object_name": obj_data.name, "tariff_unit": tariff_unit, "tariff_per_unit": str(round(grand_total / divisor if divisor > 0 else 0, 2)), "grand_total": str(grand_total)}
     )
-
-    return StreamingResponse(file_buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(f'plan_{plan_obj.name}_{plan_obj.start_year}.pdf')}"})
+    return StreamingResponse(
+        file_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{urllib.parse.quote(f'plan_{plan_obj.name}_{plan_obj.start_year}.pdf')}"}
+    )

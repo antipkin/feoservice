@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
+import {
   pricingSettingsApi, objectsApi, servicesApi,
   PricingSettingsData, ObjectData, ServiceData, PriceCalculationResult
 } from '@/lib/api';
@@ -13,20 +13,19 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { CanAccess } from '@/lib/rbac'; // 🎯 ИМПОРТ RBAC
 
 export default function PricingSettingsPage() {
   const [settings, setSettings] = useState<PricingSettingsData[]>([]);
   const [objects, setObjects] = useState<ObjectData[]>([]);
   const [services, setServices] = useState<ServiceData[]>([]);
   const [loading, setLoading] = useState(true);
-  
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSettings, setEditingSettings] = useState<PricingSettingsData | null>(null);
-  
   const [calcDialogOpen, setCalcDialogOpen] = useState(false);
   const [calcResult, setCalcResult] = useState<PriceCalculationResult | null>(null);
   const [calcLoading, setCalcLoading] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     object_id: '',
     service_type_id: '',
@@ -36,7 +35,7 @@ export default function PricingSettingsPage() {
     valid_from: '',
     valid_to: '',
   });
-  
+
   const [calcForm, setCalcForm] = useState({
     service_type_id: '',
     object_id: '',
@@ -136,7 +135,7 @@ export default function PricingSettingsPage() {
       const result = await pricingSettingsApi.calculate({
         service_type_id: parseInt(calcForm.service_type_id),
         object_id: parseInt(calcForm.object_id),
-        target_date: calcForm.date, // 🎯 ИСПРАВЛЕНО: date -> target_date
+        target_date: calcForm.date,
       });
       setCalcResult(result);
     } catch (e: any) {
@@ -177,8 +176,12 @@ export default function PricingSettingsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {/* 🎯 Калькулятор доступен всем авторизованным (не оборачиваем в CanAccess) */}
           <Button variant="outline" onClick={() => setCalcDialogOpen(true)}>🧮 Калькулятор</Button>
-          <Button onClick={() => handleOpenDialog()}>＋ Добавить настройки</Button>
+          {/* 🎯 Кнопка создания — только admin и economist */}
+          <CanAccess roles={['admin', 'economist']}>
+            <Button onClick={() => handleOpenDialog()}>＋ Добавить настройки</Button>
+          </CanAccess>
         </div>
       </div>
 
@@ -244,7 +247,10 @@ export default function PricingSettingsPage() {
                     <TableHead className="text-right">НДС %</TableHead>
                     <TableHead>Действует с</TableHead>
                     <TableHead>Действует по</TableHead>
-                    <TableHead className="text-right w-[120px]">Действия</TableHead>
+                    {/* 🎯 Заголовок "Действия" виден только admin и economist */}
+                    <CanAccess roles={['admin', 'economist']}>
+                      <TableHead className="text-right w-[120px]">Действия</TableHead>
+                    </CanAccess>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -270,19 +276,22 @@ export default function PricingSettingsPage() {
                           <TableCell className="text-right font-semibold">{s.vat_percent}%</TableCell>
                           <TableCell>{formatDate(s.valid_from)}</TableCell>
                           <TableCell>{formatDate(s.valid_to)}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpenDialog(s)}>✏️</Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDelete(s)}
-                                className="hover:bg-destructive/10 hover:text-destructive"
-                              >
-                                🗑️
-                              </Button>
-                            </div>
-                          </TableCell>
+                          {/* 🎯 Кнопки редактирования/удаления — только admin и economist */}
+                          <CanAccess roles={['admin', 'economist']}>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => handleOpenDialog(s)}>✏️</Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDelete(s)}
+                                  className="hover:bg-destructive/10 hover:text-destructive"
+                                >
+                                  🗑️
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </CanAccess>
                         </TableRow>
                       );
                     })
@@ -294,230 +303,223 @@ export default function PricingSettingsPage() {
         </CardContent>
       </Card>
 
-      {/* ============================================================ */}
-      {/* ДИАЛОГ: НАСТРОЙКИ */}
-      {/* ============================================================ */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              {editingSettings ? 'Редактировать настройки' : 'Новые настройки расчёта'}
-            </DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4 pt-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Объект (необязательно)</Label>
-                <Select
-                  value={formData.object_id}
-                  onValueChange={(v) => setFormData({ ...formData, object_id: v === '__none__' ? '' : v })}
-                >
-                  <SelectTrigger><SelectValue placeholder="Все объекты (глобально)" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">🌍 Все объекты</SelectItem>
-                    {objects.map(o => (
-                      <SelectItem key={o.id} value={o.id.toString()}>🏢 {o.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Оставьте пустым для применения ко всем объектам
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label>Услуга (необязательно)</Label>
-                <Select
-                  value={formData.service_type_id}
-                  onValueChange={(v) => setFormData({ ...formData, service_type_id: v === '__none__' ? '' : v })}
-                >
-                  <SelectTrigger><SelectValue placeholder="Все услуги (глобально)" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">🌍 Все услуги</SelectItem>
-                    {services.map(s => (
-                      <SelectItem key={s.id} value={s.id.toString()}>🔧 {s.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Оставьте пустым для применения ко всем услугам
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-4 p-4 bg-muted/50 rounded-lg">
-              <div className="space-y-2">
-                <Label>Накладные расходы (%)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="100"
-                  value={formData.overhead_percent}
-                  onChange={(e) => setFormData({ ...formData, overhead_percent: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">Аренда, административные расходы</p>
-              </div>
-              <div className="space-y-2">
-                <Label>Норма прибыли (%)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="100"
-                  value={formData.profit_percent}
-                  onChange={(e) => setFormData({ ...formData, profit_percent: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">Наценка компании</p>
-              </div>
-              <div className="space-y-2">
-                <Label>НДС (%)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="100"
-                  value={formData.vat_percent}
-                  onChange={(e) => setFormData({ ...formData, vat_percent: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">0, 5, 7, 10, 20 или 22%</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Действует с (дата) *</Label>
-                <Input
-                  type="date"
-                  value={formData.valid_from}
-                  onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Действует по (необязательно)</Label>
-                <Input
-                  type="date"
-                  value={formData.valid_to}
-                  onChange={(e) => setFormData({ ...formData, valid_to: e.target.value })}
-                />
-                <p className="text-xs text-muted-foreground">Пустое = бессрочно</p>
-              </div>
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="submit" className="flex-1">
-                {editingSettings ? 'Сохранить' : 'Создать'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* ============================================================ */}
-      {/* ДИАЛОГ: КАЛЬКУЛЯТОР */}
-      {/* ============================================================ */}
-      <Dialog open={calcDialogOpen} onOpenChange={setCalcDialogOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>🧮 Калькулятор расчёта расценки</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleCalculate} className="space-y-4 pt-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Услуга *</Label>
-                <Select
-                  value={calcForm.service_type_id}
-                  onValueChange={(v) => setCalcForm({ ...calcForm, service_type_id: v })}
-                  required
-                >
-                  <SelectTrigger><SelectValue placeholder="Выберите услугу" /></SelectTrigger>
-                  <SelectContent>
-                    {services.map(s => (
-                      <SelectItem key={s.id} value={s.id.toString()}>{s.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Объект *</Label>
-                <Select
-                  value={calcForm.object_id}
-                  onValueChange={(v) => setCalcForm({ ...calcForm, object_id: v })}
-                  required
-                >
-                  <SelectTrigger><SelectValue placeholder="Выберите объект" /></SelectTrigger>
-                  <SelectContent>
-                    {objects.map(o => (
-                      <SelectItem key={o.id} value={o.id.toString()}>{o.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Дата расчёта *</Label>
-              <Input
-                type="date"
-                value={calcForm.date}
-                onChange={(e) => setCalcForm({ ...calcForm, date: e.target.value })}
-                required
-              />
-            </div>
-
-            <Button type="submit" className="w-full" disabled={calcLoading}>
-              {calcLoading ? 'Расчёт...' : '🧮 Рассчитать расценку'}
-            </Button>
-
-            {calcResult && (
-              <div className="p-4 bg-gradient-to-br from-primary/5 to-primary/10 border border-primary/20 rounded-lg space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm text-muted-foreground">Расчёт для:</div>
-                    <div className="font-semibold">{calcResult.service_name}</div>
-                    <div className="text-sm text-muted-foreground">Объект: {calcResult.object_name}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-muted-foreground">Источник настроек:</div>
-                    <div className="font-semibold">{
-                      calcResult.settings_source === 'service+object' ? '🎯 Услуга + Объект' :
-                      calcResult.settings_source === 'service' ? '🔧 Только услуга' :
-                      calcResult.settings_source === 'object' ? '🏢 Только объект' :
-                      calcResult.settings_source === 'global' ? '🌍 Глобальные' : '❌ Не заданы'
-                    }</div>
-                  </div>
+      {/* 🎯 ДИАЛОГ: НАСТРОЙКИ — только для admin и economist */}
+      <CanAccess roles={['admin', 'economist']}>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>
+                {editingSettings ? 'Редактировать настройки' : 'Новые настройки расчёта'}
+              </DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleSubmit} className="space-y-4 pt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Объект (необязательно)</Label>
+                  <Select
+                    value={formData.object_id}
+                    onValueChange={(v) => setFormData({ ...formData, object_id: v === '__none__' ? '' : v })}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Все объекты (глобально)" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">🌍 Все объекты</SelectItem>
+                      {objects.map(o => (
+                        <SelectItem key={o.id} value={o.id.toString()}>🏢 {o.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Оставьте пустым для применения ко всем объектам
+                  </p>
                 </div>
-
-                <div className="border-t pt-3 space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Себестоимость (ресурсы):</span>
-                    <span className="font-semibold">{formatMoney(calcResult.cost_price)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">+ Накладные ({calcResult.overhead_percent}%):</span>
-                    <span className="font-semibold text-blue-600">{formatMoney(calcResult.overhead_amount)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">+ Прибыль ({calcResult.profit_percent}%):</span>
-                    <span className="font-semibold text-green-600">{formatMoney(calcResult.profit_amount)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">+ НДС ({calcResult.vat_percent}%):</span>
-                    <span className="font-semibold text-amber-600">{formatMoney(calcResult.vat_amount)}</span>
-                  </div>
-                  <div className="flex justify-between text-base pt-2 border-t">
-                    <span className="font-bold">ИТОГО:</span>
-                    <span className="font-bold text-primary text-lg">{formatMoney(calcResult.final_price)}</span>
-                  </div>
+                <div className="space-y-2">
+                  <Label>Услуга (необязательно)</Label>
+                  <Select
+                    value={formData.service_type_id}
+                    onValueChange={(v) => setFormData({ ...formData, service_type_id: v === '__none__' ? '' : v })}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Все услуги (глобально)" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">🌍 Все услуги</SelectItem>
+                      {services.map(s => (
+                        <SelectItem key={s.id} value={s.id.toString()}>🔧 {s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Оставьте пустым для применения ко всем услугам
+                  </p>
                 </div>
               </div>
-            )}
-          </form>
-        </DialogContent>
-      </Dialog>
+              <div className="grid grid-cols-3 gap-4 p-4 bg-muted/50 rounded-lg">
+                <div className="space-y-2">
+                  <Label>Накладные расходы (%)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    value={formData.overhead_percent}
+                    onChange={(e) => setFormData({ ...formData, overhead_percent: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">Аренда, административные расходы</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Норма прибыли (%)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    value={formData.profit_percent}
+                    onChange={(e) => setFormData({ ...formData, profit_percent: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">Наценка компании</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>НДС (%)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    value={formData.vat_percent}
+                    onChange={(e) => setFormData({ ...formData, vat_percent: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">0, 5, 7, 10, 20 или 22%</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Действует с (дата) *</Label>
+                  <Input
+                    type="date"
+                    value={formData.valid_from}
+                    onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Действует по (необязательно)</Label>
+                  <Input
+                    type="date"
+                    value={formData.valid_to}
+                    onChange={(e) => setFormData({ ...formData, valid_to: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">Пустое = бессрочно</p>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button type="submit" className="flex-1">
+                  {editingSettings ? 'Сохранить' : 'Создать'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
+
+      {/* 🎯 ДИАЛОГ: КАЛЬКУЛЯТОР — доступен всем авторизованным */}
+      <CanAccess roles={['admin', 'economist', 'master', 'viewer']}>
+        <Dialog open={calcDialogOpen} onOpenChange={setCalcDialogOpen}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>🧮 Калькулятор расчёта расценки</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleCalculate} className="space-y-4 pt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Услуга *</Label>
+                  <Select
+                    value={calcForm.service_type_id}
+                    onValueChange={(v) => setCalcForm({ ...calcForm, service_type_id: v })}
+                    required
+                  >
+                    <SelectTrigger><SelectValue placeholder="Выберите услугу" /></SelectTrigger>
+                    <SelectContent>
+                      {services.map(s => (
+                        <SelectItem key={s.id} value={s.id.toString()}>{s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Объект *</Label>
+                  <Select
+                    value={calcForm.object_id}
+                    onValueChange={(v) => setCalcForm({ ...calcForm, object_id: v })}
+                    required
+                  >
+                    <SelectTrigger><SelectValue placeholder="Выберите объект" /></SelectTrigger>
+                    <SelectContent>
+                      {objects.map(o => (
+                        <SelectItem key={o.id} value={o.id.toString()}>{o.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Дата расчёта *</Label>
+                <Input
+                  type="date"
+                  value={calcForm.date}
+                  onChange={(e) => setCalcForm({ ...calcForm, date: e.target.value })}
+                  required
+                />
+              </div>
+              <Button type="submit" className="w-full" disabled={calcLoading}>
+                {calcLoading ? 'Расчёт...' : '🧮 Рассчитать расценку'}
+              </Button>
+              {calcResult && (
+                <div className="p-4 bg-gradient-to-br from-primary/5 to-primary/10 border border-primary/20 rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm text-muted-foreground">Расчёт для:</div>
+                      <div className="font-semibold">{calcResult.service_name}</div>
+                      <div className="text-sm text-muted-foreground">Объект: {calcResult.object_name}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm text-muted-foreground">Источник настроек:</div>
+                      <div className="font-semibold">{
+                        calcResult.settings_source === 'service+object' ? '🎯 Услуга + Объект' :
+                        calcResult.settings_source === 'service' ? '🔧 Только услуга' :
+                        calcResult.settings_source === 'object' ? '🏢 Только объект' :
+                        calcResult.settings_source === 'global' ? '🌍 Глобальные' : '❌ Не заданы'
+                      }</div>
+                    </div>
+                  </div>
+                  <div className="border-t pt-3 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Себестоимость (ресурсы):</span>
+                      <span className="font-semibold">{formatMoney(calcResult.cost_price)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">+ Накладные ({calcResult.overhead_percent}%):</span>
+                      <span className="font-semibold text-blue-600">{formatMoney(calcResult.overhead_amount)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">+ Прибыль ({calcResult.profit_percent}%):</span>
+                      <span className="font-semibold text-green-600">{formatMoney(calcResult.profit_amount)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">+ НДС ({calcResult.vat_percent}%):</span>
+                      <span className="font-semibold text-amber-600">{formatMoney(calcResult.vat_amount)}</span>
+                    </div>
+                    <div className="flex justify-between text-base pt-2 border-t">
+                      <span className="font-bold">ИТОГО:</span>
+                      <span className="font-bold text-primary text-lg">{formatMoney(calcResult.final_price)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
     </div>
   );
 }

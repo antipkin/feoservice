@@ -28,3 +28,10 @@ class FactStatus(str, enum.Enum):
     SUBMITTED = "submitted"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+class UserRole(str, enum.Enum):
+    """Роли пользователей."""
+    ADMIN = "admin"
+    ECONOMIST = "economist"
+    MASTER = "master"
+    VIEWER = "viewer"

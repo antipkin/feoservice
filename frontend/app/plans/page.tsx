@@ -1,9 +1,9 @@
 // frontend/app/plans/page.tsx
 'use client';
 
-import { useState, useEffect, useMemo, Fragment } from 'react'; // 🎯 Добавлен Fragment
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import Link from 'next/link';
-import { 
+import {
   objectsApi, servicesApi, plansApi, serviceCategoriesApi,
   ServiceData, ObjectData, PlanData, PlanItemData, TariffData, ServiceCategoryData
 } from '@/lib/api';
@@ -15,17 +15,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { PlanMonthlyInput } from '@/components/plan-monthly-input';
+import { CanAccess } from '@/lib/rbac';
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const MONTH_NAMES_SHORT = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
 
-const formatObjectType = (type: string) => type === 'MKD' ? 'МКД' : type === 'PARKING' ? 'Паркинг' : type;
+const formatObjectType = (type: string) => type === 'МКД' ? 'МКД' : type === 'Паркинг' ? 'Паркинг' : type;
 const getPeriodString = (startMonth: number, startYear: number, periodMonths: number) => {
   let m = startMonth + periodMonths - 1, y = startYear;
   while (m > 12) { m -= 12; y += 1; }
   return `${MONTH_NAMES[startMonth - 1]} ${startYear} – ${MONTH_NAMES[m - 1]} ${y}`;
 };
-
 const generatePeriodMonths = (startMonth: number, startYear: number, periodMonthsCount: number) => {
   const months = [];
   for (let i = 0; i < periodMonthsCount; i++) {
@@ -49,20 +49,6 @@ const COL_ACTION_W = 90;
 const COL_TOTAL_SUM_W = 140;
 
 export default function PlansPage() {
-  const handleRecalculateRates = async () => {
-    if (!selectedPlan) return;
-    if (!window.confirm('Пересчитать все расценки в плане на основе актуальных тарифов из справочника?\n\nЭто обновит цены во всех месяцах для всех услуг.')) return;
-    
-    setLoading(true);
-    try {
-      await plansApi.recalculateRates(selectedPlan.id);
-      await loadPlanDetails(selectedPlan.id);
-      alert('✅ Расценки в плане успешно обновлены на основе актуальных тарифов!');
-    } catch (e: any) {
-      alert(`Ошибка пересчёта: ${e.message}`);
-    }
-    setLoading(false);
-  };
   const [objects, setObjects] = useState<ObjectData[]>([]);
   const [services, setServices] = useState<ServiceData[]>([]);
   const [categories, setCategories] = useState<ServiceCategoryData[]>([]);
@@ -70,12 +56,10 @@ export default function PlansPage() {
   const [selectedPlan, setSelectedPlan] = useState<PlanData | null>(null);
   const [planItems, setPlanItems] = useState<PlanItemData[]>([]);
   const [tariff, setTariff] = useState<TariffData | null>(null);
-  
   const [loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<PlanItemData | null>(null);
   const [filterObjectId, setFilterObjectId] = useState<string>('');
-
   const currentYear = new Date().getFullYear();
   const [newPlan, setNewPlan] = useState({ object_id: '', start_year: currentYear.toString(), start_month: '', period_months: '12', name: '' });
 
@@ -131,17 +115,30 @@ export default function PlansPage() {
     } catch (e: any) { alert(`Ошибка: ${e.message}`); }
   };
 
+  const handleRecalculateRates = async () => {
+    if (!selectedPlan) return;
+    if (!window.confirm('Пересчитать все расценки в плане на основе актуальных тарифов из справочника?\n\nЭто обновит цены во всех месяцах для всех услуг.')) return;
+    setLoading(true);
+    try {
+      await plansApi.recalculateRates(selectedPlan.id);
+      await loadPlanDetails(selectedPlan.id);
+      alert('✅ Расценки в плане успешно обновлены на основе актуальных тарифов!');
+    } catch (e: any) {
+      alert(`Ошибка пересчёта: ${e.message}`);
+    }
+    setLoading(false);
+  };
+
   const formatMoney = (val: string | number) => new Number(val).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 });
   const formatNumber = (val: string | number) => new Number(val).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 
   const periodMonths = selectedPlan ? generatePeriodMonths(selectedPlan.start_month, selectedPlan.start_year, selectedPlan.period_months) : [];
   const currentObject = useMemo(() => selectedPlan ? objects.find(o => Number(o.id) === Number(selectedPlan.object_id)) || null : null, [selectedPlan, objects]);
-  
+
   const groupedRows = useMemo((): GroupedRow[] => {
     if (!selectedPlan) return [];
     const rows: GroupedRow[] = [];
     const activeCategories = categories.filter(c => c.is_active).sort((a, b) => a.sort_order - b.sort_order);
-    
     for (const cat of activeCategories) {
       const itemsInCategory = planItems.filter(item => {
         const svc = services.find(s => Number(s.id) === Number(item.service_type_id));
@@ -163,44 +160,46 @@ export default function PlansPage() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <h1 className="text-3xl font-bold tracking-tight">Планирование ФЭО</h1>
         <div className="flex gap-2">
-          <Link href="/plans/import"><Button variant="outline" className="h-10">📥 Импорт из Excel</Button></Link>
+          <Link href="/plans/import"> <Button variant="outline" className="h-10">📥 Импорт из Excel</Button> </Link>
         </div>
       </div>
 
-      <Card>
-        <CardHeader><CardTitle>Создать новый план</CardTitle></CardHeader>
-        <CardContent>
-          <form onSubmit={handleCreatePlan} className="flex flex-wrap gap-4 items-end">
-            <div className="flex-1 min-w-[350px] space-y-2">
-              <Label>Объект</Label>
-              <Select value={newPlan.object_id} onValueChange={(v) => setNewPlan({...newPlan, object_id: v})} required>
-                <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Выберите объект" /></SelectTrigger>
-                <SelectContent>{objects.map(o => <SelectItem key={o.id} value={o.id.toString()}>{o.name} ({formatObjectType(o.type)})</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="w-48 space-y-2">
-              <Label>Месяц начала</Label>
-              <Select value={newPlan.start_month} onValueChange={(v) => setNewPlan({...newPlan, start_month: v})} required>
-                <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Выберите месяц" /></SelectTrigger>
-                <SelectContent>{MONTH_NAMES.map((m, i) => <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="w-40 space-y-2">
-              <Label>Кол-во месяцев</Label>
-              <Input type="number" min="1" max="36" className="h-10" value={newPlan.period_months} onChange={(e) => setNewPlan({...newPlan, period_months: e.target.value})} required />
-            </div>
-            <div className="w-28 space-y-2">
-              <Label>Год</Label>
-              <Input type="number" className="h-10" value={newPlan.start_year} onChange={(e) => setNewPlan({...newPlan, start_year: e.target.value})} required />
-            </div>
-            <div className="flex-1 min-w-[250px] space-y-2">
-              <Label>Название плана</Label>
-              <Input className="h-10" value={newPlan.name} onChange={(e) => setNewPlan({...newPlan, name: e.target.value})} placeholder="Основной тариф" required />
-            </div>
-            <Button type="submit" className="h-10">Создать план</Button>
-          </form>
-        </CardContent>
-      </Card>
+      <CanAccess roles={['admin', 'economist']}>
+        <Card>
+          <CardHeader><CardTitle>Создать новый план</CardTitle></CardHeader>
+          <CardContent>
+            <form onSubmit={handleCreatePlan} className="flex flex-wrap gap-4 items-end">
+              <div className="flex-1 min-w-[350px] space-y-2">
+                <Label>Объект</Label>
+                <Select value={newPlan.object_id} onValueChange={(v) => setNewPlan({...newPlan, object_id: v})} required>
+                  <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Выберите объект" /></SelectTrigger>
+                  <SelectContent>{objects.map(o => <SelectItem key={o.id} value={o.id.toString()}>{o.name} ({formatObjectType(o.type)})</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="w-48 space-y-2">
+                <Label>Месяц начала</Label>
+                <Select value={newPlan.start_month} onValueChange={(v) => setNewPlan({...newPlan, start_month: v})} required>
+                  <SelectTrigger className="h-10 w-full"><SelectValue placeholder="Выберите месяц" /></SelectTrigger>
+                  <SelectContent>{MONTH_NAMES.map((m, i) => <SelectItem key={i} value={(i + 1).toString()}>{m}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="w-40 space-y-2">
+                <Label>Кол-во месяцев</Label>
+                <Input type="number" min="1" max="36" className="h-10" value={newPlan.period_months} onChange={(e) => setNewPlan({...newPlan, period_months: e.target.value})} required />
+              </div>
+              <div className="w-28 space-y-2">
+                <Label>Год</Label>
+                <Input type="number" className="h-10" value={newPlan.start_year} onChange={(e) => setNewPlan({...newPlan, start_year: e.target.value})} required />
+              </div>
+              <div className="flex-1 min-w-[250px] space-y-2">
+                <Label>Название плана</Label>
+                <Input className="h-10" value={newPlan.name} onChange={(e) => setNewPlan({...newPlan, name: e.target.value})} placeholder="Основной тариф" required />
+              </div>
+              <Button type="submit" className="h-10">Создать план</Button>
+            </form>
+          </CardContent>
+        </Card>
+      </CanAccess>
 
       <Card>
         <CardHeader>
@@ -253,25 +252,11 @@ export default function PlansPage() {
                   <div className="text-xs text-muted-foreground">Тариф</div>
                   <div className="font-bold text-foreground">{formatMoney(tariff.tariff_per_unit)} / {tariff.tariff_unit}</div>
                 </div>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => window.open(plansApi.exportExcel(selectedPlan.id), '_blank')}
-                  title="Экспорт в Excel"
-                  className="h-10"
-                >
-                  📊 Excel
-                </Button>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => window.open(plansApi.exportPdf(selectedPlan.id), '_blank')}
-                  title="Экспорт в PDF"
-                  className="h-10"
-                >
-                  📄 PDF
-                </Button>
-                <Button variant="destructive" size="sm" onClick={handleDeletePlan} className="h-10">🗑️ Удалить</Button>
+                <Button variant="outline" size="sm" onClick={() => window.open(plansApi.exportExcel(selectedPlan.id), '_blank')} title="Экспорт в Excel" className="h-10">📊 Excel</Button>
+                <Button variant="outline" size="sm" onClick={() => window.open(plansApi.exportPdf(selectedPlan.id), '_blank')} title="Экспорт в PDF" className="h-10">📄 PDF</Button>
+                <CanAccess roles={['admin', 'economist']}>
+                  <Button variant="destructive" size="sm" onClick={handleDeletePlan} className="h-10">🗑️ Удалить</Button>
+                </CanAccess>
               </div>
             )}
           </div>
@@ -282,21 +267,14 @@ export default function PlansPage() {
               <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
                 <h3 className="text-lg font-semibold">Позиции плана</h3>
                 <div className="flex gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={handleRecalculateRates} 
-                    disabled={loading}
-                    title="Обновить цены во всех месяцах на основе актуальных расценок из справочника"
-                  >
-                    🔄 Обновить расценки
-                  </Button>
-                  <Button size="sm" onClick={() => { setEditingItem(null); setDialogOpen(true); }}>
-                    ＋ Добавить услугу
-                  </Button>
+                  <CanAccess roles={['admin', 'economist']}>
+                    <Button variant="outline" size="sm" onClick={handleRecalculateRates} disabled={loading} title="Обновить цены во всех месяцах на основе актуальных расценок из справочника">🔄 Обновить расценки</Button>
+                  </CanAccess>
+                  <CanAccess roles={['admin', 'economist']}>
+                    <Button size="sm" onClick={() => { setEditingItem(null); setDialogOpen(true); }}>＋ Добавить услугу</Button>
+                  </CanAccess>
                 </div>
               </div>
-
               {loading ? <p>Загрузка...</p> : (
                 <div className="rounded-md border overflow-x-auto">
                   <Table className="w-full border-collapse">
@@ -307,7 +285,9 @@ export default function PlansPage() {
                         {periodMonths.map((pm, idx) => <TableHead key={idx} className="text-center min-w-[100px] text-xs">{pm.label}</TableHead>)}
                         <TableHead className="text-center min-w-[120px] bg-muted border-l-2 border-border" style={{ position: 'sticky', right: `${COL_TOTAL_SUM_W + COL_ACTION_W}px`, zIndex: 30 }}>Итого кол-во</TableHead>
                         <TableHead className="text-center min-w-[140px] bg-muted border-l border-border" style={{ position: 'sticky', right: `${COL_ACTION_W}px`, zIndex: 30 }}>Итого сумма</TableHead>
-                        <TableHead className="bg-muted min-w-[90px] text-center border-l-2 border-border" style={{ position: 'sticky', right: 0, zIndex: 40 }}>⚙️</TableHead>
+                        <CanAccess roles={['admin', 'economist']}>
+                          <TableHead className="bg-muted min-w-[90px] text-center border-l-2 border-border" style={{ position: 'sticky', right: 0, zIndex: 40 }}>⚙️</TableHead>
+                        </CanAccess>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -322,15 +302,14 @@ export default function PlansPage() {
                                 {periodMonths.map((_, idx) => <TableCell key={idx} className="bg-primary/5"></TableCell>)}
                                 <TableCell className="bg-primary/5"></TableCell>
                                 <TableCell className="text-right font-bold text-sm bg-primary/10 border-l border-primary/30" style={{ position: 'sticky', right: `${COL_ACTION_W}px`, zIndex: 20 }}>{formatMoney(row.categoryTotal || 0)}</TableCell>
-                                <TableCell className="bg-primary/10"></TableCell>
+                                <CanAccess roles={['admin', 'economist']}>
+                                  <TableCell className="bg-primary/10"></TableCell>
+                                </CanAccess>
                               </TableRow>
                             );
                           }
-                          
                           const item = row.item!;
                           const svc = services.find(s => Number(s.id) === Number(item.service_type_id));
-                          
-                          // 🎯 ИСПРАВЛЕНО: используем Fragment с key вместо пустого <>
                           return (
                             <Fragment key={`item-wrapper-${item.id}`}>
                               <TableRow key={`item-qty-${item.id}`}>
@@ -347,14 +326,15 @@ export default function PlansPage() {
                                 })}
                                 <TableCell className="text-right font-semibold bg-muted border-l-2 border-border" style={{ position: 'sticky', right: `${COL_TOTAL_SUM_W + COL_ACTION_W}px`, zIndex: 10 }}>{formatNumber(item.total_quantity)}</TableCell>
                                 <TableCell className="text-right font-bold bg-muted border-l border-border" style={{ position: 'sticky', right: `${COL_ACTION_W}px`, zIndex: 10 }}>{formatMoney(item.total_amount)}</TableCell>
-                                <TableCell className="bg-muted text-center border-l-2 border-border" style={{ position: 'sticky', right: 0, zIndex: 20 }}>
-                                  <div className="flex items-center justify-center gap-1">
-                                    <Button variant="ghost" size="sm" onClick={() => { setEditingItem(item); setDialogOpen(true); }} className="h-8 w-8 p-0">✏️</Button>
-                                    <Button variant="ghost" size="sm" onClick={async () => { if(window.confirm('Удалить?')) { await plansApi.deleteItem(selectedPlan.id, item.id); await loadPlanDetails(selectedPlan.id); } }} className="h-8 w-8 p-0 hover:bg-destructive/10 hover:text-destructive">🗑️</Button>
-                                  </div>
-                                </TableCell>
+                                <CanAccess roles={['admin', 'economist']}>
+                                  <TableCell className="bg-muted text-center border-l-2 border-border" style={{ position: 'sticky', right: 0, zIndex: 20 }}>
+                                    <div className="flex items-center justify-center gap-1">
+                                      <Button variant="ghost" size="sm" onClick={() => { setEditingItem(item); setDialogOpen(true); }} className="h-8 w-8 p-0">✏️</Button>
+                                      <Button variant="ghost" size="sm" onClick={async () => { if(window.confirm('Удалить?')) { await plansApi.deleteItem(selectedPlan.id, item.id); await loadPlanDetails(selectedPlan.id); } }} className="h-8 w-8 p-0 hover:bg-destructive/10 hover:text-destructive">🗑️</Button>
+                                    </div>
+                                  </TableCell>
+                                </CanAccess>
                               </TableRow>
-
                               <TableRow key={`item-rate-${item.id}`} className="bg-muted/30 text-sm">
                                 <TableCell className="bg-muted/50 font-medium text-muted-foreground border-r border-border" style={{ position: 'sticky', left: 0, zIndex: 10 }}>Цена за ед.</TableCell>
                                 <TableCell className="bg-muted/50 border-r-2 border-border" style={{ position: 'sticky', left: COL_SERVICE_W, zIndex: 10 }}></TableCell>
@@ -364,7 +344,9 @@ export default function PlansPage() {
                                 })}
                                 <TableCell className="bg-muted/50 border-l-2 border-border" style={{ position: 'sticky', right: `${COL_TOTAL_SUM_W + COL_ACTION_W}px`, zIndex: 10 }}></TableCell>
                                 <TableCell className="bg-muted/50 border-l border-border" style={{ position: 'sticky', right: `${COL_ACTION_W}px`, zIndex: 10 }}></TableCell>
-                                <TableCell className="bg-muted/50 border-l-2 border-border" style={{ position: 'sticky', right: 0, zIndex: 20 }}></TableCell>
+                                <CanAccess roles={['admin', 'economist']}>
+                                  <TableCell className="bg-muted/50 border-l-2 border-border" style={{ position: 'sticky', right: 0, zIndex: 20 }}></TableCell>
+                                </CanAccess>
                               </TableRow>
                             </Fragment>
                           );
@@ -381,22 +363,24 @@ export default function PlansPage() {
         </CardContent>
       </Card>
 
-      {selectedPlan && (
-        <PlanMonthlyInput
-          open={dialogOpen}
-          onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditingItem(null); }}
-          services={services}
-          periodMonths={periodMonths}
-          planId={selectedPlan.id}
-          onSubmit={handleItemSubmit}
-          initialData={editingItem ? {
-            service_type_id: editingItem.service_type_id,
-            description: editingItem.description,
-            frequency: editingItem.frequency,
-            monthly: editingItem.monthly
-          } : null}
-        />
-      )}
+      <CanAccess roles={['admin', 'economist']}>
+        {selectedPlan && (
+          <PlanMonthlyInput
+            open={dialogOpen}
+            onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditingItem(null); }}
+            services={services}
+            periodMonths={periodMonths}
+            planId={selectedPlan.id}
+            onSubmit={handleItemSubmit}
+            initialData={editingItem ? {
+              service_type_id: editingItem.service_type_id,
+              description: editingItem.description,
+              frequency: editingItem.frequency,
+              monthly: editingItem.monthly
+            } : null}
+          />
+        )}
+      </CanAccess>
     </div>
   );
 }

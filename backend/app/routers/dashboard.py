@@ -12,17 +12,21 @@ from app.models.facts import FactHeader, FactItem
 from app.models.objects import Object
 from app.models.services import ServiceType
 from app.models.service_category import ServiceCategory
+from app.models.user import User
 from app.schemas.dashboard import (
     DashboardResponse, KPICard, MonthlyPlanFact,
     TopDeviation, CategoryDistribution, Alert
 )
+from app.core.security import require_authenticated
 
 router = APIRouter(prefix="/dashboard", tags=["Дашборд"])
+
 
 @router.get("/stats", response_model=DashboardResponse)
 async def get_dashboard_stats(
     year: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated)
 ):
     if year is None:
         year = date.today().year
@@ -108,7 +112,6 @@ async def get_dashboard_stats(
         .where(FactHeader.year == year)
     )
     fact_rows = facts_query.all()
-
     service_stats = {}
     for fact_item, fact_header, service_type, category in fact_rows:
         svc_id = service_type.id
@@ -161,7 +164,11 @@ async def get_dashboard_stats(
     category_rows = categories_query.all()
     total_by_categories = sum(float(row[1] or 0) for row in category_rows)
     category_distribution = [
-        CategoryDistribution(category_name=row[0] or 'Без категории', total_amount=float(row[1] or 0), percentage=round(float(row[1] or 0) / total_by_categories * 100, 1) if total_by_categories > 0 else 0)
+        CategoryDistribution(
+            category_name=row[0] or 'Без категории', 
+            total_amount=float(row[1] or 0), 
+            percentage=round(float(row[1] or 0) / total_by_categories * 100, 1) if total_by_categories > 0 else 0
+        )
         for row in category_rows
     ]
 
@@ -189,4 +196,10 @@ async def get_dashboard_stats(
                         severity="danger" if abs(d['deviation_pct']) >= 50 else "warning"
                     ))
 
-    return DashboardResponse(kpi=kpi, monthly_plan_fact=monthly_data, top_deviations=top_deviations, category_distribution=category_distribution, alerts=alerts[:10])
+    return DashboardResponse(
+        kpi=kpi, 
+        monthly_plan_fact=monthly_data, 
+        top_deviations=top_deviations, 
+        category_distribution=category_distribution, 
+        alerts=alerts[:10]
+    )

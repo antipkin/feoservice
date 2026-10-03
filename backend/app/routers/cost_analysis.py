@@ -1,5 +1,5 @@
 # backend/app/routers/cost_analysis.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
@@ -12,6 +12,7 @@ from app.models.reports import Report, ReportItem
 from app.models.objects import Object
 from app.models.services import ServiceType, Resource, ResourceNorm, ResourceRate
 from app.models.service_category import ServiceCategory
+from app.models.user import User
 from app.schemas.cost_analysis import (
     ReportCostAnalysisResponse,
     ServiceCostAnalysis,
@@ -20,11 +21,13 @@ from app.schemas.cost_analysis import (
     ImpactAnalysisResponse,
     ServiceImpact,
 )
+from app.core.security import require_authenticated
+from app.utils.audit_helper import log_action  # 🎯 ИМПОРТ ЛОГИРОВАНИЯ
 
 router = APIRouter(prefix="/cost-analysis", tags=["Анализ себестоимости"])
 
 
-async def _get_resource_rate_for_date(
+async def get_resource_rate_for_date(
     db: AsyncSession,
     resource_id: int,
     target_date: date
@@ -35,7 +38,6 @@ async def _get_resource_rate_for_date(
         ResourceRate.valid_from <= target_date,
         or_(ResourceRate.valid_to.is_(None), ResourceRate.valid_to >= target_date)
     ).order_by(ResourceRate.valid_from.desc())
-    
     result = await db.execute(query)
     return result.scalars().first()
 
@@ -53,8 +55,7 @@ async def _calculate_service_cost(
     """
     if price_overrides is None:
         price_overrides = {}
-    
-    # Получаем нормативы для услуги
+
     norms_query = select(ResourceNorm).where(
         ResourceNorm.service_type_id == service_type_id,
         ResourceNorm.is_active == True,
@@ -63,8 +64,7 @@ async def _calculate_service_cost(
     )
     norms_result = await db.execute(norms_query)
     norms = norms_result.scalars().all()
-    
-    # Получаем информацию о ресурсах
+
     resource_ids = [norm.resource_id for norm in norms]
     if not resource_ids:
         return {
@@ -76,12 +76,11 @@ async def _calculate_service_cost(
             'other': Decimal('0'),
             'resources': []
         }
-    
+
     resources_query = select(Resource).where(Resource.id.in_(resource_ids))
     resources_result = await db.execute(resources_query)
     resources_dict = {r.id: r for r in resources_result.scalars().all()}
-    
-    # Рассчитываем стоимость по каждому ресурсу
+
     total = Decimal('0')
     materials = Decimal('0')
     labor = Decimal('0')
@@ -89,23 +88,21 @@ async def _calculate_service_cost(
     energy = Decimal('0')
     other = Decimal('0')
     resources_breakdown = []
-    
+
     for norm in norms:
         resource = resources_dict.get(norm.resource_id)
         if not resource:
             continue
-        
-        # Получаем цену (либо из overrides, либо из БД)
+
         if norm.resource_id in price_overrides:
             price = price_overrides[norm.resource_id]
         else:
-            rate = await _get_resource_rate_for_date(db, norm.resource_id, target_date)
+            rate = await get_resource_rate_for_date(db, norm.resource_id, target_date)
             price = rate.price_per_unit if rate else Decimal('0')
-        
+
         resource_quantity = norm.quantity_per_unit * quantity
         resource_amount = resource_quantity * price
-        
-        # Классифицируем по типу
+
         if resource.resource_type == 'material':
             materials += resource_amount
         elif resource.resource_type == 'labor':
@@ -116,9 +113,8 @@ async def _calculate_service_cost(
             energy += resource_amount
         else:
             other += resource_amount
-        
+
         total += resource_amount
-        
         resources_breakdown.append(ResourceBreakdown(
             resource_id=resource.id,
             resource_name=resource.name,
@@ -128,7 +124,7 @@ async def _calculate_service_cost(
             price_per_unit=price,
             total_amount=resource_amount
         ))
-    
+
     return {
         'total': total,
         'materials': materials,
@@ -146,23 +142,18 @@ async def analyze_report_cost(
     db: AsyncSession = Depends(get_db)
 ):
     """Анализирует себестоимость отчёта с разбивкой по типам ресурсов."""
-    # Получаем отчёт
     report_result = await db.execute(
         select(Report).options(selectinload(Report.items)).where(Report.id == report_id)
     )
     report = report_result.scalar_one_or_none()
     if not report:
         raise HTTPException(status_code=404, detail="Отчёт не найден")
-    
-    # Получаем объект
+
     obj_result = await db.execute(select(Object).where(Object.id == report.object_id))
     obj = obj_result.scalar_one()
-    
-    # Определяем среднюю дату периода для расчёта
-    # Используем дату начала отчёта
+
     target_date = date(report.start_year, report.start_month, 1)
-    
-    # Анализируем каждую позицию отчёта
+
     services_analysis = []
     total_amount = Decimal('0')
     materials_total = Decimal('0')
@@ -170,9 +161,8 @@ async def analyze_report_cost(
     transport_total = Decimal('0')
     energy_total = Decimal('0')
     other_total = Decimal('0')
-    
+
     for item in report.items:
-        # Получаем категорию услуги
         svc_result = await db.execute(
             select(ServiceType).options(selectinload(ServiceType.category), selectinload(ServiceType.unit))
             .where(ServiceType.id == item.service_type_id)
@@ -180,12 +170,11 @@ async def analyze_report_cost(
         service = svc_result.scalar_one_or_none()
         if not service:
             continue
-        
-        # Рассчитываем себестоимость
+
         cost_data = await _calculate_service_cost(
             db, item.service_type_id, item.total_quantity, target_date
         )
-        
+
         services_analysis.append(ServiceCostAnalysis(
             service_type_id=item.service_type_id,
             service_name=item.service_name,
@@ -200,19 +189,18 @@ async def analyze_report_cost(
             other_cost=cost_data['other'],
             resources=cost_data['resources']
         ))
-        
+
         total_amount += item.total_amount
         materials_total += cost_data['materials']
         labor_total += cost_data['labor']
         transport_total += cost_data['transport']
         energy_total += cost_data['energy']
         other_total += cost_data['other']
-    
-    # Формируем строку периода
+
     MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 
                    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
     period = f"{MONTH_NAMES[report.start_month - 1]} {report.start_year} — {MONTH_NAMES[report.end_month - 1]} {report.end_year}"
-    
+
     return ReportCostAnalysisResponse(
         report_id=report.id,
         report_name=report.name or "Отчёт",
@@ -230,52 +218,45 @@ async def analyze_report_cost(
 
 @router.post("/impact", response_model=ImpactAnalysisResponse)
 async def analyze_impact(
-    request: ImpactAnalysisRequest,
-    db: AsyncSession = Depends(get_db)
+    request: Request,  # 🎯 Добавлено для получения IP
+    payload: ImpactAnalysisRequest,  # 🎯 Переименовано из 'request' во избежание конфликта типов
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated)  # 🎯 Проверка прав
 ):
     """Анализирует влияние изменения цен на ресурсы на итоговую стоимость отчёта."""
-    # Получаем отчёт
     report_result = await db.execute(
-        select(Report).options(selectinload(Report.items)).where(Report.id == request.report_id)
+        select(Report).options(selectinload(Report.items)).where(Report.id == payload.report_id)
     )
     report = report_result.scalar_one_or_none()
     if not report:
         raise HTTPException(status_code=404, detail="Отчёт не найден")
-    
-    # Формируем словарь изменений цен
-    price_overrides = {change.resource_id: change.new_price for change in request.price_changes}
-    
-    # Определяем дату для расчёта
+
+    price_overrides = {change.resource_id: change.new_price for change in payload.price_changes}
     target_date = date(report.start_year, report.start_month, 1)
-    
-    # Анализируем влияние на каждую услугу
+
     services_impact = []
     total_old = Decimal('0')
     total_new = Decimal('0')
-    
+
     for item in report.items:
-        # Старая стоимость
         old_cost_data = await _calculate_service_cost(
             db, item.service_type_id, item.total_quantity, target_date, {}
         )
         old_total = old_cost_data['total']
-        
-        # Новая стоимость с изменениями
+
         new_cost_data = await _calculate_service_cost(
             db, item.service_type_id, item.total_quantity, target_date, price_overrides
         )
         new_total = new_cost_data['total']
-        
-        # Рассчитываем изменение
+
         price_change = new_total - old_total
         price_change_percent = (price_change / old_total * 100) if old_total > 0 else Decimal('0')
-        
-        # Получаем название услуги
+
         svc_result = await db.execute(
             select(ServiceType).where(ServiceType.id == item.service_type_id)
         )
         service = svc_result.scalar_one_or_none()
-        
+
         services_impact.append(ServiceImpact(
             service_type_id=item.service_type_id,
             service_name=service.name if service else "Неизвестно",
@@ -287,13 +268,27 @@ async def analyze_impact(
             total_amount_new=item.total_amount + price_change,
             amount_change=price_change
         ))
-        
+
         total_old += item.total_amount
         total_new += item.total_amount + price_change
-    
+
     total_change = total_new - total_old
     total_change_percent = (total_change / total_old * 100) if total_old > 0 else Decimal('0')
-    
+
+    # 🎯 ЛОГИРОВАНИЕ ЗАПУСКА МОДЕЛИРОВАНИЯ (даже если это не меняет БД, это важное действие пользователя)
+    await log_action(
+        db=db,
+        user=current_user,
+        action="IMPACT_ANALYSIS",
+        resource_type="REPORT",
+        resource_id=payload.report_id,
+        new_values={
+            "price_changes_count": len(payload.price_changes),
+            "total_change": str(total_change)
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return ImpactAnalysisResponse(
         report_id=report.id,
         report_name=report.name or "Отчёт",

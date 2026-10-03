@@ -8,6 +8,9 @@ from app.models.planning import PlanHeader, PlanItem, PlanResource, PlanMonthly
 from app.models.facts import FactHeader, FactItem, FactResource, Act, ActItem
 from app.models.reports import Report, ReportItem
 from app.models.pricing_settings import ServicePricingSettings
+from app.models.user import User
+from app.models.enums import UserRole
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "Base",
@@ -18,5 +21,5 @@ __all__ = [
     "ServiceType", "ServiceRate", "Resource", "ResourceRate", "ResourceNorm",
     "PlanHeader", "PlanItem", "PlanResource", "PlanMonthly",
     "FactHeader", "FactItem", "FactResource", "Act", "ActItem",
-    "Report", "ReportItem", "ServicePricingSettings",
+    "Report", "ReportItem", "ServicePricingSettings", "User", "UserRole", "AuditLog",
 ]

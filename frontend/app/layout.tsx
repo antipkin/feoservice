@@ -2,13 +2,14 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
-import { AppHeader } from '@/components/app-header';
+import { AuthProvider } from '@/context/AuthContext';
+import AppHeader from '@/components/app-header'; // Убедитесь, что путь правильный
 
 const inter = Inter({ subsets: ['latin', 'cyrillic'] });
 
 export const metadata: Metadata = {
-  title: 'ДомСервис — Управление обслуживанием МКД и паркингов',
-  description: 'Комплексная система планирования тарифов, учёта выполненных работ и формирования актов для управляющих компаний',
+  title: 'ДомСервис',
+  description: 'Система управления обслуживанием МКД и паркингов',
 };
 
 export default function RootLayout({
@@ -19,10 +20,12 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <body className={inter.className}>
-        <div className="min-h-screen bg-background">
+        <AuthProvider>
           <AppHeader />
-          <main>{children}</main>
-        </div>
+          <main className="min-h-screen bg-background">
+            {children}
+          </main>
+        </AuthProvider>
       </body>
     </html>
   );

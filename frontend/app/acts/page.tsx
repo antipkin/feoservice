@@ -5,16 +5,11 @@ import { useState, useEffect } from 'react';
 import { actsApi, factsApi, objectsApi, servicesApi, ActData, FactHeaderData, ObjectData, ServiceData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { CanAccess } from '@/lib/rbac';
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
@@ -25,8 +20,6 @@ export default function ActsPage() {
   const [services, setServices] = useState<ServiceData[]>([]);
   const [selectedAct, setSelectedAct] = useState<ActData | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // Состояние для диалога создания акта
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [selectedFactId, setSelectedFactId] = useState<string>('');
 
@@ -34,10 +27,7 @@ export default function ActsPage() {
     const loadData = async () => {
       try {
         const [actsData, factsData, objsData, svcsData] = await Promise.all([
-          actsApi.getAll(),
-          factsApi.getAll(),
-          objectsApi.getAll(),
-          servicesApi.getAll(),
+          actsApi.getAll(), factsApi.getAll(), objectsApi.getAll(), servicesApi.getAll(),
         ]);
         setActs(actsData);
         setFacts(factsData);
@@ -88,28 +78,25 @@ export default function ActsPage() {
 
   const formatMoney = (val: string | number) =>
     new Number(val).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 });
-
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
     return d.toLocaleDateString('ru-RU');
   };
 
-  // Факты, для которых ещё нет актов
   const availableFacts = facts.filter(f => !acts.some(a => a.fact_header_id === f.id));
 
   return (
     <div className="container mx-auto py-6 px-4 space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold tracking-tight">Акты выполненных работ</h1>
-        <Button onClick={() => setCreateDialogOpen(true)}>＋ Сформировать акт</Button>
+        <CanAccess roles={['admin', 'economist', 'master']}>
+          <Button onClick={() => setCreateDialogOpen(true)}>＋ Сформировать акт</Button>
+        </CanAccess>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Список актов */}
         <Card className="lg:col-span-1">
-          <CardHeader>
-            <CardTitle>Список актов ({acts.length})</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>Список актов ({acts.length})</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {acts.length === 0 && <p className="text-sm text-muted-foreground">Актов пока нет</p>}
             {acts.map(act => (
@@ -129,7 +116,6 @@ export default function ActsPage() {
           </CardContent>
         </Card>
 
-        {/* Детали акта */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <div className="flex items-start justify-between gap-4">
@@ -143,20 +129,10 @@ export default function ActsPage() {
               </div>
               {selectedAct && (
                 <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => window.open(actsApi.exportPdf(selectedAct.id), '_blank')}
-                  >
-                    📄 PDF
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => handleDeleteAct(selectedAct.id)}
-                  >
-                    🗑️ Удалить
-                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => window.open(actsApi.exportPdf(selectedAct.id), '_blank')}>📄 PDF</Button>
+                  <CanAccess roles={['admin', 'economist', 'master']}>
+                    <Button variant="destructive" size="sm" onClick={() => handleDeleteAct(selectedAct.id)}>🗑️ Удалить</Button>
+                  </CanAccess>
                 </div>
               )}
             </div>
@@ -181,9 +157,7 @@ export default function ActsPage() {
                     <TableBody>
                       {selectedAct.items.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={7} className="text-center text-muted-foreground h-24">
-                            Нет позиций
-                          </TableCell>
+                          <TableCell colSpan={7} className="text-center text-muted-foreground h-24">Нет позиций</TableCell>
                         </TableRow>
                       ) : (
                         selectedAct.items.map((item, idx) => {
@@ -195,9 +169,7 @@ export default function ActsPage() {
                               <TableCell>{svc?.unit?.symbol || '—'}</TableCell>
                               <TableCell>
                                 {item.frequency ? (
-                                  <span className="inline-block px-2 py-1 rounded bg-background text-xs font-semibold">
-                                    {item.frequency}
-                                  </span>
+                                  <span className="inline-block px-2 py-1 rounded bg-background text-xs font-semibold">{item.frequency}</span>
                                 ) : (
                                   <span className="text-muted-foreground">—</span>
                                 )}
@@ -218,58 +190,51 @@ export default function ActsPage() {
                 </div>
               </>
             ) : (
-              <div className="text-center py-12 text-muted-foreground">
-                Выберите акт из списка слева или сформируйте новый.
-              </div>
+              <div className="text-center py-12 text-muted-foreground">Выберите акт из списка слева или сформируйте новый.</div>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Диалог создания акта */}
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Сформировать акт из факта</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-4">
-            <div className="p-3 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-800">
-              Акт будет автоматически сформирован на основе выбранного факта.
-              В акт войдут все позиции факта с указанием периодичности из справочника услуг.
+      <CanAccess roles={['admin', 'economist', 'master']}>
+        <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Сформировать акт из факта</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-4">
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-800">
+                Акт будет автоматически сформирован на основе выбранного факта.
+                В акт войдут все позиции факта с указанием периодичности из справочника услуг.
+              </div>
+              <div className="space-y-2">
+                <Label>Выберите факт *</Label>
+                <Select value={selectedFactId} onValueChange={setSelectedFactId}>
+                  <SelectTrigger><SelectValue placeholder="Выберите факт" /></SelectTrigger>
+                  <SelectContent>
+                    {availableFacts.length === 0 ? (
+                      <SelectItem value="none" disabled>Нет доступных фактов</SelectItem>
+                    ) : (
+                      availableFacts.map(f => {
+                        const obj = objects.find(o => o.id === f.object_id);
+                        return (
+                          <SelectItem key={f.id} value={f.id.toString()}>
+                            {obj?.name || '—'} • {MONTH_NAMES[f.month - 1]} {f.year}
+                          </SelectItem>
+                        );
+                      })
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setCreateDialogOpen(false)}>Отмена</Button>
+                <Button type="button" className="flex-1" onClick={handleCreateAct} disabled={!selectedFactId}>📄 Сформировать акт</Button>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Выберите факт *</Label>
-              <Select value={selectedFactId} onValueChange={setSelectedFactId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Выберите факт" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableFacts.length === 0 ? (
-                    <SelectItem value="none" disabled>Нет доступных фактов</SelectItem>
-                  ) : (
-                    availableFacts.map(f => {
-                      const obj = objects.find(o => o.id === f.object_id);
-                      return (
-                        <SelectItem key={f.id} value={f.id.toString()}>
-                          {obj?.name || '—'} • {MONTH_NAMES[f.month - 1]} {f.year}
-                        </SelectItem>
-                      );
-                    })
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setCreateDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="button" className="flex-1" onClick={handleCreateAct} disabled={!selectedFactId}>
-                📄 Сформировать акт
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
     </div>
   );
 }

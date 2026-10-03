@@ -1,6 +1,6 @@
 # backend/app/routers/services.py
 import urllib.parse
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, and_
@@ -11,11 +11,17 @@ from app.db.database import get_db
 from app.models.services import ServiceType, ServiceRate
 from app.models.planning import PlanItem, PlanHeader
 from app.models.facts import FactItem, FactHeader
+from app.models.user import User
 from app.schemas.service import (
     ServiceTypeCreate, ServiceTypeUpdate, ServiceTypeResponse,
-    ServiceRateCreate, ServiceRateUpdate, ServiceRateResponse
+    ServiceRateCreate, ServiceRateUpdate, ServiceRateResponse,
 )
 from app.utils.export import export_rates_to_excel, export_rates_to_pdf
+from app.core.security import (
+    require_authenticated,
+    require_economist_or_higher,
+)
+from app.utils.audit_helper import log_action  # 🎯 ИМПОРТ ЛОГИРОВАНИЯ
 
 router = APIRouter(prefix="/services", tags=["Справочники: Услуги и расценки"])
 
@@ -24,7 +30,10 @@ router = APIRouter(prefix="/services", tags=["Справочники: Услуг
 # SERVICE TYPES (Услуги)
 # ============================================================
 @router.get("/types", response_model=List[ServiceTypeResponse])
-async def get_service_types(db: AsyncSession = Depends(get_db)):
+async def get_service_types(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
+):
     result = await db.execute(
         select(ServiceType)
         .options(selectinload(ServiceType.unit), selectinload(ServiceType.category))
@@ -35,55 +44,122 @@ async def get_service_types(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/types", response_model=ServiceTypeResponse, status_code=status.HTTP_201_CREATED)
-async def create_service_type(item: ServiceTypeCreate, db: AsyncSession = Depends(get_db)):
-    # Проверка уникальности кода
+async def create_service_type(
+    request: Request,  # 🎯 Для IP
+    item: ServiceTypeCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     existing = await db.execute(select(ServiceType).where(ServiceType.code == item.code))
     if existing.scalar_one_or_none():
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Услуга с кодом '{item.code}' уже существует. Придумайте другой код."
         )
-    
     db_item = ServiceType(**item.model_dump())
     db.add(db_item)
     await db.commit()
     await db.refresh(db_item, attribute_names=['unit', 'category'])
+
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ УСЛУГИ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        resource_type="SERVICE_TYPE",
+        resource_id=db_item.id,
+        new_values={
+            "code": db_item.code,
+            "name": db_item.name,
+            "unit_id": db_item.unit_id,
+            "category_id": db_item.category_id,
+            "frequency": db_item.frequency,
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return db_item
 
 
 @router.patch("/types/{item_id}", response_model=ServiceTypeResponse)
-async def update_service_type(item_id: int, item_in: ServiceTypeUpdate, db: AsyncSession = Depends(get_db)):
+async def update_service_type(
+    request: Request,  # 🎯 Для IP
+    item_id: int,
+    item_in: ServiceTypeUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     result = await db.execute(select(ServiceType).where(ServiceType.id == item_id))
     item = result.scalar_one_or_none()
-    if not item: 
+    if not item:
         raise HTTPException(status_code=404, detail="Услуга не найдена")
-    
-    # Проверка уникальности кода при обновлении
+
+    # 🎯 Сохраняем старые значения
+    old_values = {
+        "code": item.code,
+        "name": item.name,
+        "unit_id": item.unit_id,
+        "category_id": item.category_id,
+        "frequency": item.frequency,
+    }
+
     if item_in.code and item_in.code != item.code:
         existing = await db.execute(select(ServiceType).where(ServiceType.code == item_in.code))
         if existing.scalar_one_or_none():
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Код '{item_in.code}' уже используется другой услугой."
             )
-    
+
     for field, value in item_in.model_dump(exclude_unset=True).items():
         setattr(item, field, value)
-    
+
     await db.commit()
     await db.refresh(item, attribute_names=['unit', 'category'])
+
+    # 🎯 ЛОГИРОВАНИЕ ОБНОВЛЕНИЯ УСЛУГИ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="UPDATE",
+        resource_type="SERVICE_TYPE",
+        resource_id=item_id,
+        old_values=old_values,
+        new_values=item_in.model_dump(exclude_unset=True),
+        ip_address=request.client.host if request.client else None
+    )
+
     return item
 
 
 @router.delete("/types/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_service_type(item_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_service_type(
+    request: Request,  # 🎯 Для IP
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     result = await db.execute(select(ServiceType).where(ServiceType.id == item_id))
     item = result.scalar_one_or_none()
-    if not item: 
+    if not item:
         raise HTTPException(status_code=404, detail="Услуга не найдена")
-    
+
+    deleted_data = {"code": item.code, "name": item.name}
+
     await db.delete(item)
     await db.commit()
+
+    # 🎯 ЛОГИРОВАНИЕ УДАЛЕНИЯ УСЛУГИ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="DELETE",
+        resource_type="SERVICE_TYPE",
+        resource_id=item_id,
+        old_values=deleted_data,
+        ip_address=request.client.host if request.client else None
+    )
+
     return None
 
 
@@ -94,7 +170,8 @@ async def delete_service_type(item_id: int, db: AsyncSession = Depends(get_db)):
 async def get_service_rates(
     object_id: Optional[int] = None,
     service_type_id: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
 ):
     query = select(ServiceRate).options(
         selectinload(ServiceRate.service_type).selectinload(ServiceType.unit),
@@ -104,11 +181,9 @@ async def get_service_rates(
         query = query.where(ServiceRate.object_id == object_id)
     if service_type_id is not None:
         query = query.where(ServiceRate.service_type_id == service_type_id)
-    
     query = query.order_by(ServiceRate.valid_from.desc())
     result = await db.execute(query)
     rates = result.scalars().all()
-    
     response = []
     for r in rates:
         response.append(ServiceRateResponse(
@@ -125,8 +200,12 @@ async def get_service_rates(
 
 
 @router.post("/rates", response_model=ServiceRateResponse, status_code=status.HTTP_201_CREATED)
-async def create_service_rate(item: ServiceRateCreate, db: AsyncSession = Depends(get_db)):
-    # Проверка на пересечение периодов
+async def create_service_rate(
+    request: Request,  # 🎯 Для IP
+    item: ServiceRateCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     if item.valid_to is None:
         overlap_filter = and_(
             ServiceRate.object_id == item.object_id,
@@ -140,39 +219,70 @@ async def create_service_rate(item: ServiceRateCreate, db: AsyncSession = Depend
             or_(ServiceRate.valid_to >= item.valid_from, ServiceRate.valid_to.is_(None)),
             item.valid_to >= ServiceRate.valid_from
         )
-
     result = await db.execute(select(ServiceRate).where(overlap_filter))
     if result.scalar_one_or_none():
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Расценка на этот период для данного объекта уже существует или пересекается с существующей"
         )
-
     db_item = ServiceRate(**item.model_dump())
     db.add(db_item)
     await db.commit()
     await db.refresh(db_item, attribute_names=['service_type', 'object'])
-    
+
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ РАСЦЕНКИ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        resource_type="SERVICE_RATE",
+        resource_id=db_item.id,
+        new_values={
+            "service_name": db_item.service_type.name if db_item.service_type else None,
+            "object_name": db_item.object.name if db_item.object else "Глобальная",
+            "price_per_unit": str(db_item.price_per_unit),
+            "valid_from": str(db_item.valid_from),
+            "valid_to": str(db_item.valid_to) if db_item.valid_to else None,
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return ServiceRateResponse(
-        id=db_item.id, object_id=db_item.object_id, service_type_id=db_item.service_type_id,
-        price_per_unit=db_item.price_per_unit, valid_from=db_item.valid_from, valid_to=db_item.valid_to,
-        service_name=db_item.service_type.name, object_name=db_item.object.name if db_item.object else "Глобальная"
+        id=db_item.id,
+        object_id=db_item.object_id,
+        service_type_id=db_item.service_type_id,
+        price_per_unit=db_item.price_per_unit,
+        valid_from=db_item.valid_from,
+        valid_to=db_item.valid_to,
+        service_name=db_item.service_type.name,
+        object_name=db_item.object.name if db_item.object else "Глобальная"
     )
 
 
 @router.patch("/rates/{rate_id}", response_model=ServiceRateResponse)
-async def update_service_rate(rate_id: int, item_in: ServiceRateUpdate, db: AsyncSession = Depends(get_db)):
+async def update_service_rate(
+    request: Request,  # 🎯 Для IP
+    rate_id: int,
+    item_in: ServiceRateUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     result = await db.execute(select(ServiceRate).where(ServiceRate.id == rate_id))
     item = result.scalar_one_or_none()
-    if not item: 
+    if not item:
         raise HTTPException(status_code=404, detail="Расценка не найдена")
-    
+
+    # 🎯 Сохраняем старые значения
+    old_values = {
+        "price_per_unit": str(item.price_per_unit),
+        "valid_from": str(item.valid_from),
+        "valid_to": str(item.valid_to) if item.valid_to else None,
+    }
+
     update_data = item_in.model_dump(exclude_unset=True)
-    
     if 'valid_from' in update_data or 'valid_to' in update_data:
         check_from = update_data.get('valid_from', item.valid_from)
         check_to = update_data.get('valid_to', item.valid_to)
-        
         if check_to is None:
             overlap_filter = and_(
                 ServiceRate.object_id == item.object_id,
@@ -188,35 +298,60 @@ async def update_service_rate(rate_id: int, item_in: ServiceRateUpdate, db: Asyn
                 or_(ServiceRate.valid_to >= check_from, ServiceRate.valid_to.is_(None)),
                 check_to >= ServiceRate.valid_from
             )
-        
         overlap_result = await db.execute(select(ServiceRate).where(overlap_filter))
         if overlap_result.scalar_one_or_none():
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail="Измененный период пересекается с другой существующей расценкой"
             )
 
     for field, value in update_data.items():
         setattr(item, field, value)
-    
+
     await db.commit()
     await db.refresh(item, attribute_names=['service_type', 'object'])
-    
+
+    # 🎯 ЛОГИРОВАНИЕ ОБНОВЛЕНИЯ РАСЦЕНКИ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="UPDATE",
+        resource_type="SERVICE_RATE",
+        resource_id=rate_id,
+        old_values=old_values,
+        new_values={
+            "price_per_unit": str(item.price_per_unit),
+            "valid_from": str(item.valid_from),
+            "valid_to": str(item.valid_to) if item.valid_to else None,
+        },
+        ip_address=request.client.host if request.client else None
+    )
+
     return ServiceRateResponse(
-        id=item.id, object_id=item.object_id, service_type_id=item.service_type_id,
-        price_per_unit=item.price_per_unit, valid_from=item.valid_from, valid_to=item.valid_to,
-        service_name=item.service_type.name, object_name=item.object.name if item.object else "Глобальная"
+        id=item.id,
+        object_id=item.object_id,
+        service_type_id=item.service_type_id,
+        price_per_unit=item.price_per_unit,
+        valid_from=item.valid_from,
+        valid_to=item.valid_to,
+        service_name=item.service_type.name,
+        object_name=item.object.name if item.object else "Глобальная"
     )
 
 
 @router.delete("/rates/{rate_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_service_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_service_rate(
+    request: Request,  # 🎯 Для IP
+    rate_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_economist_or_higher),
+):
     result = await db.execute(
         select(ServiceRate).options(selectinload(ServiceRate.service_type), selectinload(ServiceRate.object))
         .where(ServiceRate.id == rate_id)
     )
     rate = result.scalar_one_or_none()
-    if not rate: 
+    if not rate:
         raise HTTPException(status_code=404, detail="Расценка не найдена")
 
     plan_check = await db.execute(
@@ -237,15 +372,33 @@ async def delete_service_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
             FactItem.unit_price == rate.price_per_unit
         )
     )
-    
     if plan_check.scalar_one_or_none() or act_check.scalar_one_or_none():
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Невозможно удалить расценку, так как она используется в существующих планах или актах."
         )
 
+    # 🎯 Сохраняем данные перед удалением
+    deleted_data = {
+        "service_name": rate.service_type.name if rate.service_type else None,
+        "object_name": rate.object.name if rate.object else "Глобальная",
+        "price_per_unit": str(rate.price_per_unit),
+    }
+
     await db.delete(rate)
     await db.commit()
+
+    # 🎯 ЛОГИРОВАНИЕ УДАЛЕНИЯ РАСЦЕНКИ
+    await log_action(
+        db=db,
+        user=current_user,
+        action="DELETE",
+        resource_type="SERVICE_RATE",
+        resource_id=rate_id,
+        old_values=deleted_data,
+        ip_address=request.client.host if request.client else None
+    )
+
     return None
 
 
@@ -255,7 +408,8 @@ async def delete_service_rate(rate_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/rates/export/excel")
 async def export_rates_excel(
     object_id: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
 ):
     query = select(ServiceRate).options(
         selectinload(ServiceRate.service_type).selectinload(ServiceType.unit),
@@ -264,10 +418,8 @@ async def export_rates_excel(
     if object_id is not None:
         query = query.where(ServiceRate.object_id == object_id)
     query = query.order_by(ServiceRate.object_id, ServiceRate.service_type_id, ServiceRate.valid_from.desc())
-    
     result = await db.execute(query)
     rates = result.scalars().all()
-    
     rates_data = []
     for r in rates:
         rates_data.append({
@@ -278,11 +430,9 @@ async def export_rates_excel(
             "valid_from": r.valid_from.strftime("%d.%m.%Y"),
             "valid_to": r.valid_to.strftime("%d.%m.%Y") if r.valid_to else "Бессрочно",
         })
-    
     file_buffer = export_rates_to_excel(rates_data)
     obj_name = f"объект_{object_id}" if object_id else "все_объекты"
     filename = f"rates_{obj_name}.xlsx"
-    
     return StreamingResponse(
         file_buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -293,7 +443,8 @@ async def export_rates_excel(
 @router.get("/rates/export/pdf")
 async def export_rates_pdf(
     object_id: Optional[int] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_authenticated),
 ):
     query = select(ServiceRate).options(
         selectinload(ServiceRate.service_type).selectinload(ServiceType.unit),
@@ -302,10 +453,8 @@ async def export_rates_pdf(
     if object_id is not None:
         query = query.where(ServiceRate.object_id == object_id)
     query = query.order_by(ServiceRate.object_id, ServiceRate.service_type_id, ServiceRate.valid_from.desc())
-    
     result = await db.execute(query)
     rates = result.scalars().all()
-    
     rates_data = []
     for r in rates:
         rates_data.append({
@@ -316,11 +465,9 @@ async def export_rates_pdf(
             "valid_from": r.valid_from.strftime("%d.%m.%Y"),
             "valid_to": r.valid_to.strftime("%d.%m.%Y") if r.valid_to else "Бессрочно",
         })
-    
     file_buffer = export_rates_to_pdf(rates_data)
     obj_name = f"объект_{object_id}" if object_id else "все_объекты"
     filename = f"rates_{obj_name}.pdf"
-    
     return StreamingResponse(
         file_buffer,
         media_type="application/pdf",

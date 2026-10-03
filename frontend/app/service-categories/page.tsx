@@ -7,12 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { CanAccess } from '@/lib/rbac'; // 🎯 ИМПОРТ RBAC
 
 // 🎯 Пресеты категорий услуг
 const CATEGORY_PRESETS = [
@@ -73,15 +70,14 @@ export default function ServiceCategoriesPage() {
   };
 
   const handleApplyPreset = (preset: typeof CATEGORY_PRESETS[0]) => {
-  setFormData({
-    code: preset.code,
-    name: preset.name,
-    sort_order: preset.sort_order.toString(),
-  });
-  setEditingCategory(null); // Указываем, что это создание, а не редактирование
-  setDialogOpen(true); // 🎯 Открываем диалог автоматически
-};
-
+    setFormData({
+      code: preset.code,
+      name: preset.name,
+      sort_order: preset.sort_order.toString(),
+    });
+    setEditingCategory(null);
+    setDialogOpen(true);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -149,7 +145,10 @@ export default function ServiceCategoriesPage() {
             Группировка услуг для планов, отчётов и аналитики
           </p>
         </div>
-        <Button onClick={() => handleOpenDialog()}>＋ Добавить категорию</Button>
+        {/* 🎯 Кнопка создания — только admin и economist */}
+        <CanAccess roles={['admin', 'economist']}>
+          <Button onClick={() => handleOpenDialog()}>＋ Добавить категорию</Button>
+        </CanAccess>
       </div>
 
       {/* Поиск */}
@@ -165,38 +164,40 @@ export default function ServiceCategoriesPage() {
         </CardContent>
       </Card>
 
-      {/* Быстрые пресеты */}
+      {/* Быстрые пресеты — только admin и economist */}
       {!searchQuery && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">⚡ Быстрое добавление</CardTitle>
-            <CardDescription>
-              Нажмите на пресет, чтобы заполнить форму. Сохраните, чтобы добавить в справочник.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {CATEGORY_PRESETS.map((preset, idx) => {
-                const exists = categories.some(c => c.code === preset.code);
-                return (
-                  <Button
-                    key={idx}
-                    variant={exists ? 'secondary' : 'outline'}
-                    size="sm"
-                    onClick={() => handleApplyPreset(preset)}
-                    disabled={exists}
-                    className="gap-2"
-                    title={exists ? 'Уже в справочнике' : 'Нажмите, чтобы заполнить форму'}
-                  >
-                    <span className="font-mono text-xs">{preset.code}</span>
-                    <span className="text-sm">{preset.name}</span>
-                    {exists && <span className="text-xs">✓</span>}
-                  </Button>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
+        <CanAccess roles={['admin', 'economist']}>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">⚡ Быстрое добавление</CardTitle>
+              <CardDescription>
+                Нажмите на пресет, чтобы заполнить форму. Сохраните, чтобы добавить в справочник.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORY_PRESETS.map((preset, idx) => {
+                  const exists = categories.some(c => c.code === preset.code);
+                  return (
+                    <Button
+                      key={idx}
+                      variant={exists ? 'secondary' : 'outline'}
+                      size="sm"
+                      onClick={() => handleApplyPreset(preset)}
+                      disabled={exists}
+                      className="gap-2"
+                      title={exists ? 'Уже в справочнике' : 'Нажмите, чтобы заполнить форму'}
+                    >
+                      <span className="font-mono text-xs">{preset.code}</span>
+                      <span className="text-sm">{preset.name}</span>
+                      {exists && <span className="text-xs">✓</span>}
+                    </Button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </CanAccess>
       )}
 
       {/* Таблица категорий */}
@@ -216,7 +217,10 @@ export default function ServiceCategoriesPage() {
                     <TableHead className="w-[120px]">Код</TableHead>
                     <TableHead>Название</TableHead>
                     <TableHead className="text-center w-[120px]">Услуг</TableHead>
-                    <TableHead className="text-right w-[180px]">Действия</TableHead>
+                    {/* 🎯 Заголовок "Действия" — только admin и economist */}
+                    <CanAccess roles={['admin', 'economist']}>
+                      <TableHead className="text-right w-[180px]">Действия</TableHead>
+                    </CanAccess>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -263,27 +267,30 @@ export default function ServiceCategoriesPage() {
                             {cat.services_count || 0}
                           </span>
                         </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleOpenDialog(cat)}
-                              title="Редактировать"
-                            >
-                              ✏️
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDelete(cat)}
-                              title="Удалить"
-                              className="hover:bg-destructive/10 hover:text-destructive"
-                            >
-                              🗑️
-                            </Button>
-                          </div>
-                        </TableCell>
+                        {/* 🎯 Кнопки редактирования/удаления — только admin и economist */}
+                        <CanAccess roles={['admin', 'economist']}>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleOpenDialog(cat)}
+                                title="Редактировать"
+                              >
+                                ✏️
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDelete(cat)}
+                                title="Удалить"
+                                className="hover:bg-destructive/10 hover:text-destructive"
+                              >
+                                🗑️
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </CanAccess>
                       </TableRow>
                     ))
                   )}
@@ -294,89 +301,88 @@ export default function ServiceCategoriesPage() {
         </CardContent>
       </Card>
 
-      {/* Диалог создания/редактирования */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              {editingCategory ? 'Редактировать категорию' : 'Новая категория услуг'}
-            </DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4 pt-4">
-            <div className="grid grid-cols-2 gap-4">
+      {/* 🎯 Диалог создания/редактирования — только admin и economist */}
+      <CanAccess roles={['admin', 'economist']}>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {editingCategory ? 'Редактировать категорию' : 'Новая категория услуг'}
+              </DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleSubmit} className="space-y-4 pt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Код *</Label>
+                  <Input
+                    value={formData.code}
+                    onChange={(e) => setFormData({...formData, code: e.target.value.toUpperCase()})}
+                    placeholder="UPR"
+                    maxLength={20}
+                    required
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Уникальный идентификатор (латиницей)
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Порядок *</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={formData.sort_order}
+                    onChange={(e) => setFormData({...formData, sort_order: e.target.value})}
+                    placeholder="1"
+                    required
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Чем меньше, тем выше в списке
+                  </p>
+                </div>
+              </div>
               <div className="space-y-2">
-                <Label>Код *</Label>
+                <Label>Название *</Label>
                 <Input
-                  value={formData.code}
-                  onChange={(e) => setFormData({...formData, code: e.target.value.toUpperCase()})}
-                  placeholder="UPR"
-                  maxLength={20}
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  placeholder="Управление"
+                  maxLength={200}
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  Уникальный идентификатор (латиницей)
+                  Полное название категории
                 </p>
               </div>
-              <div className="space-y-2">
-                <Label>Порядок *</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={formData.sort_order}
-                  onChange={(e) => setFormData({...formData, sort_order: e.target.value})}
-                  placeholder="1"
-                  required
-                />
-                <p className="text-xs text-muted-foreground">
-                  Чем меньше, тем выше в списке
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Название *</Label>
-              <Input
-                value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
-                placeholder="Управление"
-                maxLength={200}
-                required
-              />
-              <p className="text-xs text-muted-foreground">
-                Полное название категории
-              </p>
-            </div>
-
-            {/* Предпросмотр */}
-            <div className="p-4 bg-muted/50 rounded-lg border">
-              <Label className="text-xs text-muted-foreground mb-2 block">Предпросмотр</Label>
-              <div className="flex items-center gap-4">
-                <div>
-                  <div className="text-xs text-muted-foreground">Код:</div>
-                  <div className="font-mono text-sm">{formData.code || '—'}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-muted-foreground">Название:</div>
-                  <div className="font-medium">{formData.name || '—'}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-muted-foreground">Порядок:</div>
-                  <div className="font-mono text-sm">{formData.sort_order || '—'}</div>
+              {/* Предпросмотр */}
+              <div className="p-4 bg-muted/50 rounded-lg border">
+                <Label className="text-xs text-muted-foreground mb-2 block">Предпросмотр</Label>
+                <div className="flex items-center gap-4">
+                  <div>
+                    <div className="text-xs text-muted-foreground">Код:</div>
+                    <div className="font-mono text-sm">{formData.code || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Название:</div>
+                    <div className="font-medium">{formData.name || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Порядок:</div>
+                    <div className="font-mono text-sm">{formData.sort_order || '—'}</div>
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="submit" className="flex-1">
-                {editingCategory ? 'Сохранить' : 'Создать'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button type="submit" className="flex-1">
+                  {editingCategory ? 'Сохранить' : 'Создать'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
     </div>
   );
 }

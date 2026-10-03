@@ -14,16 +14,16 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { CanAccess } from '@/lib/rbac'; // 🎯 ИМПОРТ RBAC
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-                     'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
 export default function ImportPlanPage() {
   const router = useRouter();
   const [objects, setObjects] = useState<ObjectData[]>([]);
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
-
   const [formData, setFormData] = useState({
     object_id: '',
     start_month: '1',
@@ -47,7 +47,6 @@ export default function ImportPlanPage() {
       alert('Заполните все поля и выберите файл');
       return;
     }
-
     setLoading(true);
     try {
       const result = await importApi.preview(
@@ -73,7 +72,6 @@ export default function ImportPlanPage() {
       alert('Выберите хотя бы одну услугу для импорта');
       return;
     }
-
     setLoading(true);
     try {
       const result = await importApi.confirm({
@@ -103,7 +101,7 @@ export default function ImportPlanPage() {
     const matched = preview.services
       .filter(s => s.match_status === 'matched')
       .map(s => s.row_number);
-
+    
     if (selectedRows.size === matched.length) {
       setSelectedRows(new Set());
     } else {
@@ -111,7 +109,7 @@ export default function ImportPlanPage() {
     }
   };
 
-  const formatNumber = (val: number) => 
+  const formatNumber = (val: number) =>
     val.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 
   return (
@@ -166,9 +164,12 @@ export default function ImportPlanPage() {
                      className="h-10 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90" />
             </div>
           </div>
-          <Button className="mt-4" onClick={handlePreview} disabled={loading || !file || !formData.object_id}>
-            {loading ? 'Загрузка...' : '🔍 Предпросмотр'}
-          </Button>
+          {/* 🎯 Кнопка предпросмотра — только admin и economist */}
+          <CanAccess roles={['admin', 'economist']}>
+            <Button className="mt-4" onClick={handlePreview} disabled={loading || !file || !formData.object_id}>
+              {loading ? 'Загрузка...' : '🔍 Предпросмотр'}
+            </Button>
+          </CanAccess>
         </CardContent>
       </Card>
 
@@ -195,7 +196,6 @@ export default function ImportPlanPage() {
                 </ul>
               </div>
             )}
-
             <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -240,7 +240,6 @@ export default function ImportPlanPage() {
                         ? 'bg-green-100 text-green-800'
                         : 'bg-red-100 text-red-800';
                       const statusText = isMatched ? '✓ Найден' : '✗ Не найден';
-
                       return (
                         <TableRow 
                           key={svc.row_number} 
@@ -276,16 +275,18 @@ export default function ImportPlanPage() {
                 </TableBody>
               </Table>
             </div>
-
             <div className="mt-4 flex items-center justify-between">
               <div className="text-sm text-muted-foreground">
                 Выбрано: <strong>{selectedRows.size}</strong> из {preview.services.filter(s => s.match_status === 'matched').length} сопоставленных услуг
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setPreview(null)}>Отмена</Button>
-                <Button onClick={handleConfirm} disabled={loading || selectedRows.size === 0}>
-                  {loading ? 'Импорт...' : `✓ Импортировать (${selectedRows.size} услуг)`}
-                </Button>
+                {/* 🎯 Кнопка подтверждения импорта — только admin и economist */}
+                <CanAccess roles={['admin', 'economist']}>
+                  <Button onClick={handleConfirm} disabled={loading || selectedRows.size === 0}>
+                    {loading ? 'Импорт...' : `✓ Импортировать (${selectedRows.size} услуг)`}
+                  </Button>
+                </CanAccess>
               </div>
             </div>
           </CardContent>

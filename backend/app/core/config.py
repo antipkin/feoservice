@@ -1,5 +1,8 @@
+# backend/app/core/config.py
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import List
+import json
 
 
 class Settings(BaseSettings):
@@ -18,6 +21,23 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000"]
 
+    # 🎯 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: умный парсер для CORS origins
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            # Пробуем распарсить как JSON-массив: '["a","b"]'
+            if v.strip().startswith("["):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            # Если не JSON — разделяем по запятым: "a,b,c"
+            return [s.strip().strip('"').strip("'") for s in v.split(",") if s.strip()]
+        return v
+
     @property
     def DATABASE_URL(self) -> str:
         return (
@@ -27,7 +47,6 @@ class Settings(BaseSettings):
 
     @property
     def DATABASE_URL_SYNC(self) -> str:
-        """Для Alembic (синхронный драйвер)."""
         return (
             f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"

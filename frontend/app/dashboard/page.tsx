@@ -2,6 +2,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
 import { dashboardApi, DashboardData } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,28 +14,44 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell
 } from 'recharts';
+import { CanAccess } from '@/lib/rbac'; // 🎯 ИМПОРТ RBAC
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
 export default function DashboardPage() {
+  // 🎯 ШАГ 1: ВСЕ ХУКИ В САМОМ НАЧАЛЕ
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [year, setYear] = useState(new Date().getFullYear());
 
+  // 🎯 ШАГ 2: USE EFFECT ДЛЯ ПРОВЕРКИ АВТОРИЗАЦИИ
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      try {
-        const stats = await dashboardApi.getStats(year);
-        setData(stats);
-      } catch (e) {
-        console.error('Ошибка загрузки дашборда:', e);
-      }
-      setLoading(false);
-    };
-    loadData();
-  }, [year]);
+    if (!isLoading && !user) {
+      router.push('/login');
+    }
+  }, [user, isLoading, router]);
 
+  // 🎯 ШАГ 3: USE EFFECT ДЛЯ ЗАГРУЗКИ ДАННЫХ
+  useEffect(() => {
+    if (user) {
+      const loadData = async () => {
+        setLoading(true);
+        try {
+          const stats = await dashboardApi.getStats(year);
+          setData(stats);
+        } catch (e) {
+          console.error('Ошибка загрузки дашборда:', e);
+        }
+        setLoading(false);
+      };
+      loadData();
+    }
+  }, [year, user]);
+
+  // 🎯 ШАГ 4: ФУНКЦИИ
   const formatMoney = (val: number) =>
     val.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
 
@@ -46,6 +64,15 @@ export default function DashboardPage() {
     };
     return colors[color] || colors.blue;
   };
+
+  // 🎯 ШАГ 5: УСЛОВНЫЕ ВОЗВРАТЫ ТОЛЬКО ПОСЛЕ ВСЕХ ХУКОВ
+  if (isLoading || !user) {
+    return (
+      <div className="container mx-auto py-12 px-4 text-center">
+        <div className="text-lg text-muted-foreground">Проверка авторизации...</div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -65,15 +92,19 @@ export default function DashboardPage() {
     );
   }
 
+  // 🎯 ШАГ 6: ОСНОВНОЙ РЕНДЕР
   return (
     <div className="container mx-auto py-6 px-4 space-y-6">
       {/* Заголовок с выбором года */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <h1 className="text-3xl font-bold tracking-tight">📊 Дашборд</h1>
         <div className="flex items-center gap-4">
-          <Link href="/cost-analysis">
-            <Button variant="outline">🔍 Анализ себестоимости</Button>
-          </Link>
+          {/* 🎯 Кнопка "Анализ себестоимости" — только для admin и economist */}
+          <CanAccess roles={['admin', 'economist']}>
+            <Link href="/cost-analysis">
+              <Button variant="outline">🔍 Анализ себестоимости</Button>
+            </Link>
+          </CanAccess>
           <div className="flex items-center gap-2">
             <Label>Год:</Label>
             <Input

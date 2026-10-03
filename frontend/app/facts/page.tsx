@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
+import {
   objectsApi, plansApi, servicesApi, factsApi,
   ObjectData, PlanData, ServiceData, FactHeaderData, FactItemData, PlanFactComparisonItem
 } from '@/lib/api';
@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { CanAccess } from '@/lib/rbac';
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
@@ -24,22 +25,17 @@ export default function FactsPage() {
   const [selectedFact, setSelectedFact] = useState<FactHeaderData | null>(null);
   const [factItems, setFactItems] = useState<FactItemData[]>([]);
   const [comparison, setComparison] = useState<PlanFactComparisonItem[]>([]);
-  
   const [loading, setLoading] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  
-  // Состояния для диалогов добавления/редактирования
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [actionMode, setActionMode] = useState<'add' | 'edit'>('add');
   const [editingFactItem, setEditingFactItem] = useState<FactItemData | null>(null);
-  
   const [formData, setFormData] = useState({
     service_type_id: '',
     actual_quantity: '',
     unit_price: '',
     notes: '',
   });
-
   const [newFact, setNewFact] = useState({
     object_id: '',
     year: new Date().getFullYear().toString(),
@@ -102,13 +98,9 @@ export default function FactsPage() {
     } catch (e: any) { alert(`Ошибка: ${e.message}`); }
   };
 
-  // 🎯 УМНАЯ ФУНКЦИЯ ОТКРЫТИЯ ДИАЛОГА
   const handleOpenActionDialog = (row: PlanFactComparisonItem) => {
-    // Ищем, есть ли уже запись факта для этой услуги по service_type_id
     const existingFactItem = factItems.find(fi => fi.service_type_id === row.service_type_id);
-
     if (existingFactItem) {
-      // Режим РЕДАКТИРОВАНИЯ
       setActionMode('edit');
       setEditingFactItem(existingFactItem);
       setFormData({
@@ -118,12 +110,11 @@ export default function FactsPage() {
         notes: existingFactItem.notes || '',
       });
     } else {
-      // Режим ДОБАВЛЕНИЯ, но с предзаполненными плановыми данными!
       setActionMode('add');
       setEditingFactItem(null);
       setFormData({
         service_type_id: row.service_type_id.toString(),
-        actual_quantity: row.plan_quantity, // Берем из плана как основу
+        actual_quantity: row.plan_quantity,
         unit_price: row.plan_amount && row.plan_quantity ? (parseFloat(row.plan_amount) / parseFloat(row.plan_quantity)).toString() : '0',
         notes: '',
       });
@@ -134,7 +125,6 @@ export default function FactsPage() {
   const handleSaveAction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFact) return;
-    
     try {
       const payload = {
         service_type_id: parseInt(formData.service_type_id),
@@ -142,13 +132,11 @@ export default function FactsPage() {
         unit_price: parseFloat(formData.unit_price),
         notes: formData.notes || null,
       };
-
       if (actionMode === 'edit' && editingFactItem) {
         await factsApi.updateItem(editingFactItem.id, payload);
       } else {
         await factsApi.addItem(selectedFact.id, payload);
       }
-      
       setActionDialogOpen(false);
       setEditingFactItem(null);
       await loadFactDetails(selectedFact.id);
@@ -181,7 +169,9 @@ export default function FactsPage() {
     <div className="container mx-auto py-6 px-4 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">Ввод факта</h1>
-        <Button onClick={() => setCreateDialogOpen(true)}>＋ Создать факт</Button>
+        <CanAccess roles={['admin', 'economist', 'master']}>
+          <Button onClick={() => setCreateDialogOpen(true)}>＋ Создать факт</Button>
+        </CanAccess>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -209,29 +199,15 @@ export default function FactsPage() {
                 {selectedFact && <CardDescription className="mt-1">Статус: {selectedFact.status}</CardDescription>}
               </div>
               {selectedFact && (
-                <div className="flex gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => window.open(factsApi.exportExcel(selectedFact.id), '_blank')}
-                    title="Экспорт в Excel"
-                  >
-                    📊 Excel
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => window.open(factsApi.exportPdf(selectedFact.id), '_blank')}
-                    title="Экспорт в PDF"
-                  >
-                    📄 PDF
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handleCopyFromPlan}>
-                    📋 Копировать из плана
-                  </Button>
-                  <Button variant="destructive" size="sm" onClick={handleDeleteFact}>
-                    🗑️ Удалить
-                  </Button>
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" onClick={() => window.open(factsApi.exportExcel(selectedFact.id), '_blank')} title="Экспорт в Excel">📊 Excel</Button>
+                  <Button variant="outline" size="sm" onClick={() => window.open(factsApi.exportPdf(selectedFact.id), '_blank')} title="Экспорт в PDF">📄 PDF</Button>
+                  <CanAccess roles={['admin', 'economist', 'master']}>
+                    <Button variant="outline" size="sm" onClick={handleCopyFromPlan}>📋 Копировать из плана</Button>
+                  </CanAccess>
+                  <CanAccess roles={['admin', 'economist', 'master']}>
+                    <Button variant="destructive" size="sm" onClick={handleDeleteFact}>🗑️ Удалить</Button>
+                  </CanAccess>
                 </div>
               )}
             </div>
@@ -241,14 +217,15 @@ export default function FactsPage() {
               <>
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-lg font-semibold">План-факт анализ</h3>
-                  <Button size="sm" onClick={() => {
-                    setActionMode('add');
-                    setEditingFactItem(null);
-                    setFormData({ service_type_id: '', actual_quantity: '', unit_price: '', notes: '' });
-                    setActionDialogOpen(true);
-                  }}>＋ Добавить услугу</Button>
+                  <CanAccess roles={['admin', 'economist', 'master']}>
+                    <Button size="sm" onClick={() => {
+                      setActionMode('add');
+                      setEditingFactItem(null);
+                      setFormData({ service_type_id: '', actual_quantity: '', unit_price: '', notes: '' });
+                      setActionDialogOpen(true);
+                    }}>＋ Добавить услугу</Button>
+                  </CanAccess>
                 </div>
-
                 {loading ? <p>Загрузка...</p> : (
                   <div className="rounded-md border overflow-x-auto">
                     <Table>
@@ -262,7 +239,9 @@ export default function FactsPage() {
                           <TableHead className="text-right">План сумма</TableHead>
                           <TableHead className="text-right">Факт сумма</TableHead>
                           <TableHead className="text-right">Отклонение %</TableHead>
-                          <TableHead className="text-center">⚙️</TableHead>
+                          <CanAccess roles={['admin', 'economist', 'master']}>
+                            <TableHead className="text-center">⚙️</TableHead>
+                          </CanAccess>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -273,7 +252,6 @@ export default function FactsPage() {
                             const deviationPct = parseFloat(row.deviation_pct);
                             const deviationColor = deviationPct > 0 ? 'text-green-600' : deviationPct < 0 ? 'text-red-600' : 'text-muted-foreground';
                             const hasFact = factItems.some(fi => fi.service_type_id === row.service_type_id);
-                            
                             return (
                               <TableRow key={idx} className={!hasFact ? 'bg-muted/30' : ''}>
                                 <TableCell className="font-medium">{row.service_name}</TableCell>
@@ -284,21 +262,19 @@ export default function FactsPage() {
                                 <TableCell className="text-right">{formatMoney(row.plan_amount)}</TableCell>
                                 <TableCell className="text-right">{formatMoney(row.fact_amount)}</TableCell>
                                 <TableCell className={`text-right font-semibold ${deviationColor}`}>{deviationPct > 0 ? '+' : ''}{formatNumber(row.deviation_pct)}%</TableCell>
-                                <TableCell className="text-center">
-                                  <div className="flex items-center justify-center gap-1">
-                                    <Button variant="ghost" size="sm" onClick={() => handleOpenActionDialog(row)} title={hasFact ? "Редактировать факт" : "Внести факт на основе плана"} className="h-8 w-8 p-0">
-                                      ✏️
-                                    </Button>
-                                    {hasFact && (
-                                      <Button variant="ghost" size="sm" onClick={() => {
-                                        const item = factItems.find(fi => fi.service_type_id === row.service_type_id);
-                                        if (item) handleDeleteFactItem(item.id);
-                                      }} title="Удалить" className="h-8 w-8 p-0 hover:bg-destructive/10 hover:text-destructive">
-                                        🗑️
-                                      </Button>
-                                    )}
-                                  </div>
-                                </TableCell>
+                                <CanAccess roles={['admin', 'economist', 'master']}>
+                                  <TableCell className="text-center">
+                                    <div className="flex items-center justify-center gap-1">
+                                      <Button variant="ghost" size="sm" onClick={() => handleOpenActionDialog(row)} title={hasFact ? "Редактировать факт" : "Внести факт на основе плана"} className="h-8 w-8 p-0">✏️</Button>
+                                      {hasFact && (
+                                        <Button variant="ghost" size="sm" onClick={() => {
+                                          const item = factItems.find(fi => fi.service_type_id === row.service_type_id);
+                                          if (item) handleDeleteFactItem(item.id);
+                                        }} title="Удалить" className="h-8 w-8 p-0 hover:bg-destructive/10 hover:text-destructive">🗑️</Button>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                </CanAccess>
                               </TableRow>
                             );
                           })
@@ -315,7 +291,6 @@ export default function FactsPage() {
         </Card>
       </div>
 
-      {/* Диалог создания факта */}
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Создать новый факт</DialogTitle></DialogHeader>
@@ -345,7 +320,6 @@ export default function FactsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 🎯 УНИВЕРСАЛЬНЫЙ ДИАЛОГ: Добавление или Редактирование */}
       <Dialog open={actionDialogOpen} onOpenChange={setActionDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -355,7 +329,6 @@ export default function FactsPage() {
             <div className="p-3 bg-muted rounded-md text-sm">
               <strong>Услуга:</strong> {services.find(s => s.id.toString() === formData.service_type_id)?.name || 'Выберите услугу'}
             </div>
-            
             {actionMode === 'add' && (
               <div className="space-y-2">
                 <Label>Услуга *</Label>
@@ -367,7 +340,6 @@ export default function FactsPage() {
                 </Select>
               </div>
             )}
-
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Фактическое количество *</Label>

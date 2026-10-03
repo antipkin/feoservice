@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { CanAccess } from '@/lib/rbac'; // 🎯 ИМПОРТ RBAC
 
 // 🎯 Типы ресурсов
 const RESOURCE_TYPES = [
@@ -43,11 +44,9 @@ export default function ResourcesPage() {
   const [services, setServices] = useState<ServiceData[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('resources');
-
   const [resourceDialogOpen, setResourceDialogOpen] = useState(false);
   const [rateDialogOpen, setRateDialogOpen] = useState(false);
   const [normDialogOpen, setNormDialogOpen] = useState(false);
-
   const [editingResource, setEditingResource] = useState<ResourceData | null>(null);
   const [editingRate, setEditingRate] = useState<ResourceRateData | null>(null);
   const [editingNorm, setEditingNorm] = useState<ResourceNormData | null>(null);
@@ -55,11 +54,9 @@ export default function ResourcesPage() {
   const [resourceForm, setResourceForm] = useState({
     code: '', name: '', unit: '', resource_type: 'material'
   });
-
   const [rateForm, setRateForm] = useState({
     resource_id: '', price_per_unit: '', valid_from: '', valid_to: ''
   });
-
   const [normForm, setNormForm] = useState({
     service_type_id: '', resource_id: '', quantity_per_unit: '', valid_from: '', valid_to: ''
   });
@@ -165,7 +162,6 @@ export default function ResourcesPage() {
         valid_from: rateForm.valid_from,
         valid_to: rateForm.valid_to || null
       };
-
       if (editingRate) {
         await resourcesApi.updateRate(editingRate.id, payload);
       } else {
@@ -217,7 +213,6 @@ export default function ResourcesPage() {
         valid_from: normForm.valid_from,
         valid_to: normForm.valid_to || null
       };
-
       if (editingNorm) {
         await resourcesApi.updateNorm(editingNorm.id, payload);
       } else {
@@ -243,10 +238,8 @@ export default function ResourcesPage() {
   const formatMoney = (val: string) => new Number(val).toLocaleString('ru-RU', {
     style: 'currency', currency: 'RUB', maximumFractionDigits: 2
   });
-
   const formatDate = (dateStr: string | null) =>
     dateStr ? new Date(dateStr).toLocaleDateString('ru-RU') : 'Бессрочно';
-
   const getResourceName = (id: number) => resources.find(r => r.id === id)?.name || '—';
   const getServiceName = (id: number) => services.find(s => s.id === id)?.name || '—';
 
@@ -289,46 +282,54 @@ export default function ResourcesPage() {
       {/* ============================================================ */}
       {activeTab === 'resources' && (
         <>
-          {/* Быстрые пресеты */}
-          <Card>
-            <CardHeader>
-              <div className="flex justify-between items-center">
-                <div>
-                  <CardTitle className="text-base">⚡ Быстрое добавление</CardTitle>
-                  <CardDescription>
-                    Нажмите на пресет, чтобы заполнить форму и создать ресурс
-                  </CardDescription>
+          {/* 🎯 Быстрые пресеты — только для admin и economist */}
+          <CanAccess roles={['admin', 'economist']}>
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <CardTitle className="text-base">⚡ Быстрое добавление</CardTitle>
+                    <CardDescription>
+                      Нажмите на пресет, чтобы заполнить форму и создать ресурс
+                    </CardDescription>
+                  </div>
+                  <Button onClick={() => handleOpenResourceDialog()}>＋ Добавить ресурс</Button>
                 </div>
-                <Button onClick={() => handleOpenResourceDialog()}>＋ Добавить ресурс</Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                {RESOURCE_PRESETS.map((preset, idx) => {
-                  const exists = resources.some(r => r.code === preset.code);
-                  return (
-                    <Button
-                      key={idx}
-                      variant={exists ? 'secondary' : 'outline'}
-                      size="sm"
-                      onClick={() => handleApplyResourcePreset(preset)}
-                      className="gap-2"
-                      title={exists ? 'Уже в справочнике (нажмите для редактирования)' : 'Создать ресурс'}
-                    >
-                      <span className="font-mono text-xs">{preset.code}</span>
-                      <span className="text-sm">{preset.name}</span>
-                      {exists && <span className="text-xs">✓</span>}
-                    </Button>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {RESOURCE_PRESETS.map((preset, idx) => {
+                    const exists = resources.some(r => r.code === preset.code);
+                    return (
+                      <Button
+                        key={idx}
+                        variant={exists ? 'secondary' : 'outline'}
+                        size="sm"
+                        onClick={() => handleApplyResourcePreset(preset)}
+                        className="gap-2"
+                        title={exists ? 'Уже в справочнике (нажмите для редактирования)' : 'Создать ресурс'}
+                      >
+                        <span className="font-mono text-xs">{preset.code}</span>
+                        <span className="text-sm">{preset.name}</span>
+                        {exists && <span className="text-xs">✓</span>}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          </CanAccess>
 
           {/* Таблица ресурсов */}
           <Card>
             <CardHeader>
-              <CardTitle>Справочник ресурсов ({resources.length})</CardTitle>
+              <div className="flex justify-between items-center">
+                <CardTitle>Справочник ресурсов ({resources.length})</CardTitle>
+                {/* 🎯 Кнопка добавления — только для admin и economist */}
+                <CanAccess roles={['admin', 'economist']}>
+                  <Button onClick={() => handleOpenResourceDialog()}>＋ Добавить ресурс</Button>
+                </CanAccess>
+              </div>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -342,7 +343,10 @@ export default function ResourcesPage() {
                         <TableHead>Название</TableHead>
                         <TableHead className="w-[100px]">Ед. изм.</TableHead>
                         <TableHead className="w-[150px]">Тип</TableHead>
-                        <TableHead className="text-right w-[120px]">Действия</TableHead>
+                        {/* 🎯 Заголовок "Действия" — только для admin и economist */}
+                        <CanAccess roles={['admin', 'economist']}>
+                          <TableHead className="text-right w-[120px]">Действия</TableHead>
+                        </CanAccess>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -367,19 +371,22 @@ export default function ResourcesPage() {
                                 {RESOURCE_TYPES.find(t => t.value === r.resource_type)?.label || r.resource_type}
                               </span>
                             </TableCell>
-                            <TableCell className="text-right">
-                              <div className="flex justify-end gap-1">
-                                <Button variant="ghost" size="sm" onClick={() => handleOpenResourceDialog(r)}>✏️</Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleDeleteResource(r)}
-                                  className="hover:bg-destructive/10 hover:text-destructive"
-                                >
-                                  🗑️
-                                </Button>
-                              </div>
-                            </TableCell>
+                            {/* 🎯 Кнопки редактирования/удаления — только для admin и economist */}
+                            <CanAccess roles={['admin', 'economist']}>
+                              <TableCell className="text-right">
+                                <div className="flex justify-end gap-1">
+                                  <Button variant="ghost" size="sm" onClick={() => handleOpenResourceDialog(r)}>✏️</Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleDeleteResource(r)}
+                                    className="hover:bg-destructive/10 hover:text-destructive"
+                                  >
+                                    🗑️
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </CanAccess>
                           </TableRow>
                         ))
                       )}
@@ -403,7 +410,10 @@ export default function ResourcesPage() {
                 <CardTitle>Расценки на ресурсы ({rates.length})</CardTitle>
                 <CardDescription>Цены на ресурсы с периодами действия</CardDescription>
               </div>
-              <Button onClick={() => handleOpenRateDialog()}>＋ Добавить расценку</Button>
+              {/* 🎯 Кнопка добавления — только для admin и economist */}
+              <CanAccess roles={['admin', 'economist']}>
+                <Button onClick={() => handleOpenRateDialog()}>＋ Добавить расценку</Button>
+              </CanAccess>
             </div>
           </CardHeader>
           <CardContent>
@@ -418,7 +428,10 @@ export default function ResourcesPage() {
                       <TableHead className="text-right">Цена за ед.</TableHead>
                       <TableHead>Действует с</TableHead>
                       <TableHead>Действует по</TableHead>
-                      <TableHead className="text-right w-[120px]">Действия</TableHead>
+                      {/* 🎯 Заголовок "Действия" — только для admin и economist */}
+                      <CanAccess roles={['admin', 'economist']}>
+                        <TableHead className="text-right w-[120px]">Действия</TableHead>
+                      </CanAccess>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -435,19 +448,22 @@ export default function ResourcesPage() {
                           <TableCell className="text-right font-semibold">{formatMoney(r.price_per_unit)}</TableCell>
                           <TableCell>{formatDate(r.valid_from)}</TableCell>
                           <TableCell>{formatDate(r.valid_to)}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpenRateDialog(r)}>✏️</Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeleteRate(r)}
-                                className="hover:bg-destructive/10 hover:text-destructive"
-                              >
-                                🗑️
-                              </Button>
-                            </div>
-                          </TableCell>
+                          {/* 🎯 Кнопки редактирования/удаления — только для admin и economist */}
+                          <CanAccess roles={['admin', 'economist']}>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => handleOpenRateDialog(r)}>✏️</Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteRate(r)}
+                                  className="hover:bg-destructive/10 hover:text-destructive"
+                                >
+                                  🗑️
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </CanAccess>
                         </TableRow>
                       ))
                     )}
@@ -472,7 +488,10 @@ export default function ResourcesPage() {
                   Сколько ресурса нужно на 1 единицу услуги (например, 0.5 л краски на 1 м² покраски)
                 </CardDescription>
               </div>
-              <Button onClick={() => handleOpenNormDialog()}>＋ Добавить норматив</Button>
+              {/* 🎯 Кнопка добавления — только для admin и economist */}
+              <CanAccess roles={['admin', 'economist']}>
+                <Button onClick={() => handleOpenNormDialog()}>＋ Добавить норматив</Button>
+              </CanAccess>
             </div>
           </CardHeader>
           <CardContent>
@@ -488,7 +507,10 @@ export default function ResourcesPage() {
                       <TableHead className="text-right">Норма на 1 ед.</TableHead>
                       <TableHead>Действует с</TableHead>
                       <TableHead>Действует по</TableHead>
-                      <TableHead className="text-right w-[120px]">Действия</TableHead>
+                      {/* 🎯 Заголовок "Действия" — только для admin и economist */}
+                      <CanAccess roles={['admin', 'economist']}>
+                        <TableHead className="text-right w-[120px]">Действия</TableHead>
+                      </CanAccess>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -508,19 +530,22 @@ export default function ResourcesPage() {
                           </TableCell>
                           <TableCell>{formatDate(n.valid_from)}</TableCell>
                           <TableCell>{formatDate(n.valid_to)}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="sm" onClick={() => handleOpenNormDialog(n)}>✏️</Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDeleteNorm(n)}
-                                className="hover:bg-destructive/10 hover:text-destructive"
-                              >
-                                🗑️
-                              </Button>
-                            </div>
-                          </TableCell>
+                          {/* 🎯 Кнопки редактирования/удаления — только для admin и economist */}
+                          <CanAccess roles={['admin', 'economist']}>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => handleOpenNormDialog(n)}>✏️</Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteNorm(n)}
+                                  className="hover:bg-destructive/10 hover:text-destructive"
+                                >
+                                  🗑️
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </CanAccess>
                         </TableRow>
                       ))
                     )}
@@ -533,240 +558,234 @@ export default function ResourcesPage() {
       )}
 
       {/* ============================================================ */}
-      {/* ДИАЛОГ: РЕСУРС */}
+      {/* 🎯 ДИАЛОГ: РЕСУРС — только для admin и economist */}
       {/* ============================================================ */}
-      <Dialog open={resourceDialogOpen} onOpenChange={setResourceDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingResource ? 'Редактировать ресурс' : 'Новый ресурс'}</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleResourceSubmit} className="space-y-4 pt-4">
-            <div className="grid grid-cols-2 gap-4">
+      <CanAccess roles={['admin', 'economist']}>
+        <Dialog open={resourceDialogOpen} onOpenChange={setResourceDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{editingResource ? 'Редактировать ресурс' : 'Новый ресурс'}</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleResourceSubmit} className="space-y-4 pt-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Код *</Label>
+                  <Input
+                    value={resourceForm.code}
+                    onChange={(e) => setResourceForm({ ...resourceForm, code: e.target.value.toUpperCase() })}
+                    placeholder="KRASKA"
+                    maxLength={50}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Единица измерения *</Label>
+                  <Input
+                    value={resourceForm.unit}
+                    onChange={(e) => setResourceForm({ ...resourceForm, unit: e.target.value })}
+                    placeholder="л, кг, час"
+                    maxLength={50}
+                    required
+                  />
+                </div>
+              </div>
               <div className="space-y-2">
-                <Label>Код *</Label>
+                <Label>Название *</Label>
                 <Input
-                  value={resourceForm.code}
-                  onChange={(e) => setResourceForm({ ...resourceForm, code: e.target.value.toUpperCase() })}
-                  placeholder="KRASKA"
-                  maxLength={50}
+                  value={resourceForm.name}
+                  onChange={(e) => setResourceForm({ ...resourceForm, name: e.target.value })}
+                  placeholder="Краска водоэмульсионная"
+                  maxLength={500}
                   required
                 />
               </div>
               <div className="space-y-2">
-                <Label>Единица измерения *</Label>
+                <Label>Тип ресурса *</Label>
+                <Select
+                  value={resourceForm.resource_type}
+                  onValueChange={(v) => setResourceForm({ ...resourceForm, resource_type: v })}
+                  required
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {RESOURCE_TYPES.map(t => (
+                      <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setResourceDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button type="submit" className="flex-1">
+                  {editingResource ? 'Сохранить' : 'Создать'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
+
+      {/* ============================================================ */}
+      {/* 🎯 ДИАЛОГ: РАСЦЕНКА — только для admin и economist */}
+      {/* ============================================================ */}
+      <CanAccess roles={['admin', 'economist']}>
+        <Dialog open={rateDialogOpen} onOpenChange={setRateDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{editingRate ? 'Редактировать расценку' : 'Новая расценка на ресурс'}</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleRateSubmit} className="space-y-4 pt-4">
+              <div className="space-y-2">
+                <Label>Ресурс *</Label>
+                <Select
+                  value={rateForm.resource_id}
+                  onValueChange={(v) => setRateForm({ ...rateForm, resource_id: v })}
+                  required
+                >
+                  <SelectTrigger><SelectValue placeholder="Выберите ресурс" /></SelectTrigger>
+                  <SelectContent>
+                    {resources.map(r => (
+                      <SelectItem key={r.id} value={r.id.toString()}>
+                        {r.name} ({r.unit})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Цена за единицу (₽) *</Label>
                 <Input
-                  value={resourceForm.unit}
-                  onChange={(e) => setResourceForm({ ...resourceForm, unit: e.target.value })}
-                  placeholder="л, кг, час"
-                  maxLength={50}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={rateForm.price_per_unit}
+                  onChange={(e) => setRateForm({ ...rateForm, price_per_unit: e.target.value })}
                   required
                 />
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Название *</Label>
-              <Input
-                value={resourceForm.name}
-                onChange={(e) => setResourceForm({ ...resourceForm, name: e.target.value })}
-                placeholder="Краска водоэмульсионная"
-                maxLength={500}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Тип ресурса *</Label>
-              <Select
-                value={resourceForm.resource_type}
-                onValueChange={(v) => setResourceForm({ ...resourceForm, resource_type: v })}
-                required
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {RESOURCE_TYPES.map(t => (
-                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setResourceDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="submit" className="flex-1">
-                {editingResource ? 'Сохранить' : 'Создать'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+              <div className="space-y-2">
+                <Label>Действует с (дата) *</Label>
+                <Input
+                  type="date"
+                  value={rateForm.valid_from}
+                  onChange={(e) => setRateForm({ ...rateForm, valid_from: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Действует по (необязательно)</Label>
+                <Input
+                  type="date"
+                  value={rateForm.valid_to}
+                  onChange={(e) => setRateForm({ ...rateForm, valid_to: e.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Оставьте пустым для бессрочной расценки
+                </p>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setRateDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button type="submit" className="flex-1">
+                  {editingRate ? 'Сохранить' : 'Создать'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
 
       {/* ============================================================ */}
-      {/* ДИАЛОГ: РАСЦЕНКА */}
+      {/* 🎯 ДИАЛОГ: НОРМАТИВ — только для admin и economist */}
       {/* ============================================================ */}
-      <Dialog open={rateDialogOpen} onOpenChange={setRateDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingRate ? 'Редактировать расценку' : 'Новая расценка на ресурс'}</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleRateSubmit} className="space-y-4 pt-4">
-            <div className="space-y-2">
-              <Label>Ресурс *</Label>
-              <Select
-                value={rateForm.resource_id}
-                onValueChange={(v) => setRateForm({ ...rateForm, resource_id: v })}
-                required
-              >
-                <SelectTrigger><SelectValue placeholder="Выберите ресурс" /></SelectTrigger>
-                <SelectContent>
-                  {resources.map(r => (
-                    <SelectItem key={r.id} value={r.id.toString()}>
-                      {r.name} ({r.unit})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Цена за единицу (₽) *</Label>
-              <Input
-                type="number"
-                step="0.01"
-                min="0"
-                value={rateForm.price_per_unit}
-                onChange={(e) => setRateForm({ ...rateForm, price_per_unit: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Действует с (дата) *</Label>
-              <Input
-                type="date"
-                value={rateForm.valid_from}
-                onChange={(e) => setRateForm({ ...rateForm, valid_from: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Действует по (необязательно)</Label>
-              <Input
-                type="date"
-                value={rateForm.valid_to}
-                onChange={(e) => setRateForm({ ...rateForm, valid_to: e.target.value })}
-              />
-              <p className="text-xs text-muted-foreground">
-                Оставьте пустым для бессрочной расценки
-              </p>
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setRateDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="submit" className="flex-1">
-                {editingRate ? 'Сохранить' : 'Создать'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* ============================================================ */}
-      {/* ДИАЛОГ: НОРМАТИВ */}
-      {/* ============================================================ */}
-      <Dialog open={normDialogOpen} onOpenChange={setNormDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingNorm ? 'Редактировать норматив' : 'Новый норматив'}</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleNormSubmit} className="space-y-4 pt-4">
-            <div className="space-y-2">
-              <Label>Услуга *</Label>
-              <Select
-                value={normForm.service_type_id}
-                onValueChange={(v) => setNormForm({ ...normForm, service_type_id: v })}
-                required
-              >
-                <SelectTrigger><SelectValue placeholder="Выберите услугу" /></SelectTrigger>
-                <SelectContent>
-                  {services.map(s => (
-                    <SelectItem key={s.id} value={s.id.toString()}>
-                      {s.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Ресурс *</Label>
-              <Select
-                value={normForm.resource_id}
-                onValueChange={(v) => setNormForm({ ...normForm, resource_id: v })}
-                required
-              >
-                <SelectTrigger><SelectValue placeholder="Выберите ресурс" /></SelectTrigger>
-                <SelectContent>
-                  {resources.map(r => (
-                    <SelectItem key={r.id} value={r.id.toString()}>
-                      {r.name} ({r.unit})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Норма расхода на 1 ед. услуги *</Label>
-              <Input
-                type="number"
-                step="0.0001"
-                min="0"
-                value={normForm.quantity_per_unit}
-                onChange={(e) => setNormForm({ ...normForm, quantity_per_unit: e.target.value })}
-                placeholder="Например: 0.5 (литра краски на 1 м²)"
-                required
-              />
-              <p className="text-xs text-muted-foreground">
-                Сколько единиц ресурса требуется на 1 единицу услуги
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Действует с (дата) *</Label>
-              <Input
-                type="date"
-                value={normForm.valid_from}
-                onChange={(e) => setNormForm({ ...normForm, valid_from: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Действует по (необязательно)</Label>
-              <Input
-                type="date"
-                value={normForm.valid_to}
-                onChange={(e) => setNormForm({ ...normForm, valid_to: e.target.value })}
-              />
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button type="button" variant="outline" className="flex-1" onClick={() => setNormDialogOpen(false)}>
-                Отмена
-              </Button>
-              <Button type="submit" className="flex-1">
-                {editingNorm ? 'Сохранить' : 'Создать'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <CanAccess roles={['admin', 'economist']}>
+        <Dialog open={normDialogOpen} onOpenChange={setNormDialogOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{editingNorm ? 'Редактировать норматив' : 'Новый норматив'}</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleNormSubmit} className="space-y-4 pt-4">
+              <div className="space-y-2">
+                <Label>Услуга *</Label>
+                <Select
+                  value={normForm.service_type_id}
+                  onValueChange={(v) => setNormForm({ ...normForm, service_type_id: v })}
+                  required
+                >
+                  <SelectTrigger><SelectValue placeholder="Выберите услугу" /></SelectTrigger>
+                  <SelectContent>
+                    {services.map(s => (
+                      <SelectItem key={s.id} value={s.id.toString()}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Ресурс *</Label>
+                <Select
+                  value={normForm.resource_id}
+                  onValueChange={(v) => setNormForm({ ...normForm, resource_id: v })}
+                  required
+                >
+                  <SelectTrigger><SelectValue placeholder="Выберите ресурс" /></SelectTrigger>
+                  <SelectContent>
+                    {resources.map(r => (
+                      <SelectItem key={r.id} value={r.id.toString()}>
+                        {r.name} ({r.unit})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Норма расхода на 1 ед. услуги *</Label>
+                <Input
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  value={normForm.quantity_per_unit}
+                  onChange={(e) => setNormForm({ ...normForm, quantity_per_unit: e.target.value })}
+                  placeholder="Например: 0.5 (литра краски на 1 м²)"
+                  required
+                />
+                <p className="text-xs text-muted-foreground">
+                  Сколько единиц ресурса требуется на 1 единицу услуги
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Действует с (дата) *</Label>
+                <Input
+                  type="date"
+                  value={normForm.valid_from}
+                  onChange={(e) => setNormForm({ ...normForm, valid_from: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Действует по (необязательно)</Label>
+                <Input
+                  type="date"
+                  value={normForm.valid_to}
+                  onChange={(e) => setNormForm({ ...normForm, valid_to: e.target.value })}
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setNormDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button type="submit" className="flex-1">
+                  {editingNorm ? 'Сохранить' : 'Создать'}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CanAccess>
     </div>
   );
 }

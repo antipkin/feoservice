@@ -2,6 +2,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
 import { costAnalysisApi, reportsApi, resourcesApi, ReportCostAnalysis, ImpactAnalysis, ReportData, ResourceData } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,27 +12,38 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { CanAccess } from '@/lib/rbac';
 
 export default function CostAnalysisPage() {
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+
   const [reports, setReports] = useState<ReportData[]>([]);
   const [resources, setResources] = useState<ResourceData[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string>('');
   const [analysis, setAnalysis] = useState<ReportCostAnalysis | null>(null);
   const [impact, setImpact] = useState<ImpactAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
-  
   const [priceChanges, setPriceChanges] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [rpts, res] = await Promise.all([reportsApi.getAll(), resourcesApi.getAll()]);
-        setReports(rpts);
-        setResources(res);
-      } catch (e) { console.error('Ошибка загрузки:', e); }
-    };
-    loadData();
-  }, []);
+    if (!isLoading && (!user || !['admin', 'economist'].includes(user.role))) {
+      router.push('/');
+    }
+  }, [user, isLoading, router]);
+
+  useEffect(() => {
+    if (user && ['admin', 'economist'].includes(user.role)) {
+      const loadData = async () => {
+        try {
+          const [rpts, res] = await Promise.all([reportsApi.getAll(), resourcesApi.getAll()]);
+          setReports(rpts);
+          setResources(res);
+        } catch (e) { console.error('Ошибка загрузки:', e); }
+      };
+      loadData();
+    }
+  }, [user]);
 
   const handleAnalyze = async () => {
     if (!selectedReportId) return;
@@ -58,7 +71,7 @@ export default function CostAnalysisPage() {
           resource_id: parseInt(resourceId),
           new_price: parseFloat(price)
         }));
-      
+
       const result = await costAnalysisApi.analyzeImpact({
         report_id: parseInt(selectedReportId),
         price_changes: changes
@@ -73,8 +86,15 @@ export default function CostAnalysisPage() {
   const formatMoney = (val: string) => new Number(val).toLocaleString('ru-RU', {
     style: 'currency', currency: 'RUB', maximumFractionDigits: 2
   });
-
   const formatPercent = (val: string) => `${new Number(val).toFixed(1)}%`;
+
+  if (isLoading || !user || !['admin', 'economist'].includes(user.role)) {
+    return (
+      <div className="container mx-auto py-12 px-4 text-center">
+        <div className="text-lg text-muted-foreground">Проверка прав доступа...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto py-6 px-4 space-y-6">
@@ -105,9 +125,11 @@ export default function CostAnalysisPage() {
                 </SelectContent>
               </Select>
             </div>
-            <Button onClick={handleAnalyze} disabled={loading || !selectedReportId}>
-              {loading ? 'Анализ...' : '🔍 Анализировать'}
-            </Button>
+            <CanAccess roles={['admin', 'economist']}>
+              <Button onClick={handleAnalyze} disabled={loading || !selectedReportId}>
+                {loading ? 'Анализ...' : '🔍 Анализировать'}
+              </Button>
+            </CanAccess>
           </div>
         </CardContent>
       </Card>
@@ -158,7 +180,6 @@ export default function CostAnalysisPage() {
               <TabsTrigger value="services">По услугам</TabsTrigger>
               <TabsTrigger value="impact">Моделирование изменений</TabsTrigger>
             </TabsList>
-
             <TabsContent value="services">
               <Card>
                 <CardHeader>
@@ -202,7 +223,6 @@ export default function CostAnalysisPage() {
                 </CardContent>
               </Card>
             </TabsContent>
-
             <TabsContent value="impact">
               <Card>
                 <CardHeader>
@@ -226,11 +246,11 @@ export default function CostAnalysisPage() {
                       </div>
                     ))}
                   </div>
-
-                  <Button onClick={handleImpactAnalysis} disabled={loading || Object.keys(priceChanges).length === 0}>
-                    {loading ? 'Расчёт...' : '🧮 Рассчитать влияние'}
-                  </Button>
-
+                  <CanAccess roles={['admin', 'economist']}>
+                    <Button onClick={handleImpactAnalysis} disabled={loading || Object.keys(priceChanges).length === 0}>
+                      {loading ? 'Расчёт...' : '🧮 Рассчитать влияние'}
+                    </Button>
+                  </CanAccess>
                   {impact && (
                     <div className="mt-6 space-y-4">
                       <div className="p-4 rounded-lg bg-gradient-to-br from-primary/5 to-primary/10 border border-primary/20">
@@ -252,7 +272,6 @@ export default function CostAnalysisPage() {
                           </div>
                         </div>
                       </div>
-
                       <div className="rounded-md border">
                         <Table>
                           <TableHeader>
