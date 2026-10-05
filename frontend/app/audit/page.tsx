@@ -175,6 +175,41 @@ export default function AuditPage() {
     setDateTo('');
   };
 
+  const handleExportExcel = () => {
+    const params = new URLSearchParams();
+    if (filterAction !== 'all') params.set('action', filterAction);
+    if (filterResource !== 'all') params.set('resource_type', filterResource);
+    if (filterUser !== 'all') params.set('user_id', filterUser);
+    if (searchQuery.trim()) params.set('search', searchQuery.trim());
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    params.set('limit', '1000');
+
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+    const token = localStorage.getItem('token');
+    const url = `${API_URL}/audit/export/excel?${params.toString()}`;
+
+    fetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('Ошибка экспорта');
+        return res.blob();
+      })
+      .then(blob => {
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        const timestamp = new Date().toISOString().split('T')[0];
+        a.download = `audit_log_${timestamp}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(blobUrl);
+      })
+      .catch(err => alert(`Ошибка экспорта: ${err.message}`));
+  };
+
   const getActionBadge = (action: string) => {
     const styles: Record<string, string> = {
       CREATE: 'bg-green-100 text-green-800',
@@ -208,11 +243,17 @@ export default function AuditPage() {
 
   return (
     <div className="container mx-auto py-6 px-4 space-y-6">
-      <div className="flex justify-between items-center">
+      {/* Заголовок с кнопками */}
+      <div className="flex justify-between items-center flex-wrap gap-2">
         <h1 className="text-3xl font-bold tracking-tight">🛡️ Журнал аудита</h1>
-        <Button onClick={() => { loadLogs(true); loadStats(); }} variant="outline">
-          🔄 Обновить
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleExportExcel}>
+            📊 Экспорт в Excel
+          </Button>
+          <Button onClick={() => { loadLogs(true); loadStats(); }} variant="outline">
+            🔄 Обновить
+          </Button>
+        </div>
       </div>
 
       {/* 📊 Статистика */}
@@ -261,7 +302,6 @@ export default function AuditPage() {
                 </SelectContent>
               </Select>
             </div>
-
             <div className="space-y-1">
               <Label className="text-xs">Тип ресурса</Label>
               <Select value={filterResource} onValueChange={setFilterResource}>
@@ -271,7 +311,6 @@ export default function AuditPage() {
                 </SelectContent>
               </Select>
             </div>
-
             <div className="space-y-1">
               <Label className="text-xs">Пользователь</Label>
               <Select value={filterUser} onValueChange={setFilterUser}>
@@ -282,17 +321,14 @@ export default function AuditPage() {
                 </SelectContent>
               </Select>
             </div>
-
             <div className="space-y-1">
               <Label className="text-xs">Дата от</Label>
               <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="h-9" />
             </div>
-
             <div className="space-y-1">
               <Label className="text-xs">Дата до</Label>
               <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="h-9" />
             </div>
-
             <div className="space-y-1">
               <Label className="text-xs">Поиск</Label>
               <div className="flex gap-1">
@@ -307,7 +343,6 @@ export default function AuditPage() {
               </div>
             </div>
           </div>
-
           <div className="mt-3 flex justify-between items-center">
             <p className="text-sm text-muted-foreground">
               Показано: <strong>{logs.length}</strong> записей

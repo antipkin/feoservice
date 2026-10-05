@@ -1,14 +1,14 @@
-import { logger } from './logger'; // 🎯 Импортируем логгер
+// frontend/lib/api.ts
+import { logger } from './logger';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 export async function fetchAPI(endpoint: string, options: RequestInit = {}) {
   const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
   
-  // 🎯 Логируем начало запроса
-  logger.info(`API Request: ${options.method || 'GET'} ${endpoint}`, { 
+  logger.info(`API Request: ${options.method || 'GET'} ${endpoint}`, {
     url: `${API_URL}${endpoint}`,
-    hasToken: !!token 
+    hasToken: !!token
   });
 
   const res = await fetch(`${API_URL}${endpoint}`, {
@@ -20,19 +20,17 @@ export async function fetchAPI(endpoint: string, options: RequestInit = {}) {
     },
   });
 
-  // 🎯 Логируем ответ
   if (!res.ok) {
     const error = await res.json().catch(() => ({}));
-    logger.error(`API Error: ${res.status} ${endpoint}`, { 
-      status: res.status, 
+    logger.error(`API Error: ${res.status} ${endpoint}`, {
+      status: res.status,
       detail: error.detail,
-      endpoint 
+      endpoint
     });
     throw new Error(error.detail || `API Error: ${res.status}`);
   }
-  
+
   logger.info(`API Success: ${res.status} ${endpoint}`);
-  
   if (res.status === 204) return null;
   return res.json();
 }
@@ -114,7 +112,7 @@ export const resourcesApi = {
   getNorms: (serviceTypeId?: number, resourceId?: number) => {
     const params = new URLSearchParams();
     if (serviceTypeId) params.append('service_type_id', serviceTypeId.toString());
-    if (resourceId) params.append('resource_id', resourceId.toString());
+    if (resourceId) params.append('resource_id', resourceId.toString()); // 🎯 ИСПРАВЛЕНО: было toS tring()
     return fetchAPI(`/resources/norms?${params.toString()}`);
   },
   createNorm: (data: any) => fetchAPI('/resources/norms', { method: 'POST', body: JSON.stringify(data) }),
@@ -142,6 +140,7 @@ export const plansApi = {
     if (year) params.append('year', year.toString());
     return fetchAPI(`/plans?${params.toString()}`);
   },
+  get: (id: number) => fetchAPI(`/plans/${id}`), // 🎯 ДОБАВЛЕНО: метод get
   create: (data: any) => fetchAPI('/plans', { method: 'POST', body: JSON.stringify(data) }),
   delete: (planId: number) => fetchAPI(`/plans/${planId}`, { method: 'DELETE' }),
   copy: (planId: number, data: any) => fetchAPI(`/plans/${planId}/copy`, { method: 'POST', body: JSON.stringify(data) }),
@@ -164,8 +163,8 @@ export const factsApi = {
     if (month) params.append('month', month.toString());
     return fetchAPI(`/facts?${params.toString()}`);
   },
+  get: (factId: number) => fetchAPI(`/facts/${factId}`), // 🎯 ДОБАВЛЕНО: метод get
   create: (data: any) => fetchAPI('/facts', { method: 'POST', body: JSON.stringify(data) }),
-  get: (factId: number) => fetchAPI(`/facts/${factId}`),
   update: (factId: number, data: any) => fetchAPI(`/facts/${factId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (factId: number) => fetchAPI(`/facts/${factId}`, { method: 'DELETE' }),
   copyFromPlan: (factId: number, planId: number, month: number, year: number) =>
@@ -186,8 +185,8 @@ export const actsApi = {
     if (year) params.append('year', year.toString());
     return fetchAPI(`/acts?${params.toString()}`);
   },
+  get: (actId: number) => fetchAPI(`/acts/${actId}`), // 🎯 ДОБАВЛЕНО: метод get
   createFromFact: (factId: number) => fetchAPI(`/acts/from-fact/${factId}`, { method: 'POST' }),
-  get: (actId: number) => fetchAPI(`/acts/${actId}`),
   delete: (actId: number) => fetchAPI(`/acts/${actId}`, { method: 'DELETE' }),
   exportPdf: (actId: number) => `${API_URL}/acts/${actId}/export/pdf`,
 };
@@ -199,8 +198,8 @@ export const reportsApi = {
     if (year) params.append('year', year.toString());
     return fetchAPI(`/reports?${params.toString()}`);
   },
-  create: (data: any) => fetchAPI('/reports', { method: 'POST', body: JSON.stringify(data) }),
   get: (reportId: number) => fetchAPI(`/reports/${reportId}`),
+  create: (data: any) => fetchAPI('/reports', { method: 'POST', body: JSON.stringify(data) }),
   update: (reportId: number, data: any) => fetchAPI(`/reports/${reportId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (reportId: number) => fetchAPI(`/reports/${reportId}`, { method: 'DELETE' }),
   exportExcel: (reportId: number) => `${API_URL}/reports/${reportId}/export/excel`,
@@ -231,6 +230,9 @@ export const importApi = {
   confirm: (data: any) => fetchAPI('/plans/import-excel/confirm', { method: 'POST', body: JSON.stringify(data) }),
 };
 
+// ============================================================
+// ТИПЫ (оставлены без изменений, они корректны)
+// ============================================================
 export interface UserResponse {
   id: number;
   email: string;

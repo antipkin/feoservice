@@ -15,6 +15,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from io import BytesIO
 
 # ============================================================
 # НАСТРОЙКА ШРИФТА ДЛЯ КИРИЛЛИЦЫ (PDF)
@@ -954,3 +955,134 @@ def export_rates_to_pdf(rates_data: List[Dict[str, Any]]) -> io.BytesIO:
     doc.build(elements)
     buffer.seek(0)
     return buffer
+
+def export_audit_to_excel(logs: list) -> BytesIO:
+    """
+    Экспортирует журнал аудита в Excel с форматированием.
+    
+    Args:
+        logs: Список словарей с записями аудита
+    
+    Returns:
+        BytesIO с содержимым Excel-файла
+    """
+    from openpyxl import Workbook
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Журнал аудита"
+
+    # === СТИЛИ ===
+    header_font = Font(bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    create_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")
+    update_fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+    delete_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+    
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+    # === ЗАГОЛОВКИ ===
+    headers = [
+        "№", "Дата и время", "Пользователь", "Действие", 
+        "Тип ресурса", "ID ресурса", "IP-адрес", "Было (old_values)", "Стало (new_values)"
+    ]
+    
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+
+    # === ДАННЫЕ ===
+    import json
+    
+    for idx, log in enumerate(logs, 1):
+        row = idx + 1
+        
+        # Определяем цвет строки по действию
+        action = log.get("action", "")
+        if action == "CREATE":
+            row_fill = create_fill
+        elif action == "UPDATE":
+            row_fill = update_fill
+        elif action == "DELETE":
+            row_fill = delete_fill
+        else:
+            row_fill = None
+        
+        # Преобразуем JSON-значения в читаемый вид
+        old_values = log.get("old_values")
+        new_values = log.get("new_values")
+        
+        if old_values and isinstance(old_values, (dict, list)):
+            old_str = json.dumps(old_values, ensure_ascii=False, indent=2, default=str)
+        else:
+            old_str = str(old_values) if old_values else "—"
+        
+        if new_values and isinstance(new_values, (dict, list)):
+            new_str = json.dumps(new_values, ensure_ascii=False, indent=2, default=str)
+        else:
+            new_str = str(new_values) if new_values else "—"
+        
+        # Форматируем дату
+        created_at = log.get("created_at")
+        if hasattr(created_at, "strftime"):
+            date_str = created_at.strftime("%d.%m.%Y %H:%M:%S")
+        else:
+            date_str = str(created_at)
+        
+        # Записываем ячейки
+        row_data = [
+            idx,
+            date_str,
+            log.get("username", ""),
+            action,
+            log.get("resource_type", ""),
+            log.get("resource_id") or "—",
+            log.get("ip_address") or "—",
+            old_str,
+            new_str,
+        ]
+        
+        for col, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row, column=col, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="top", wrap_text=(col >= 8))
+            if row_fill:
+                cell.fill = row_fill
+
+    # === ШИРИНА КОЛОНОК ===
+    column_widths = {
+        'A': 6,   # №
+        'B': 20,  # Дата
+        'C': 18,  # Пользователь
+        'D': 12,  # Действие
+        'E': 20,  # Тип ресурса
+        'F': 12,  # ID
+        'G': 15,  # IP
+        'H': 50,  # Было
+        'I': 50,  # Стало
+    }
+    
+    for col_letter, width in column_widths.items():
+        ws.column_dimensions[col_letter].width = width
+
+    # === ЗАМОРАЖИВАЕМ ПЕРВУЮ СТРОКУ ===
+    ws.freeze_panes = "A2"
+    
+    # === АВТОФИЛЬТР ===
+    ws.auto_filter.ref = ws.dimensions
+
+    # === СОХРАНЯЕМ В BytesIO ===
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output

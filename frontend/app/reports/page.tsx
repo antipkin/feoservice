@@ -19,7 +19,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import { CanAccess } from '@/lib/rbac'; // 🎯 ДОБАВЛЕН ИМПОРТ
+import { CanAccess } from '@/lib/rbac';
 
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
@@ -35,7 +35,7 @@ export default function ReportsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const currentYear = new Date().getFullYear();
-  
+
   const [formData, setFormData] = useState({
     object_id: '',
     start_month: '1',
@@ -44,7 +44,7 @@ export default function ReportsPage() {
     end_year: currentYear.toString(),
     name: '',
   });
-  
+
   const [editData, setEditData] = useState({
     start_month: '',
     start_year: '',
@@ -164,7 +164,6 @@ export default function ReportsPage() {
     <div className="container mx-auto py-6 px-4 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold tracking-tight">📑 Отчеты по объектам</h1>
-        {/* 🎯 Кнопка создания видна только admin, economist, master */}
         <CanAccess roles={['admin', 'economist', 'master']}>
           <Button onClick={() => setCreateDialogOpen(true)}>＋ Создать отчет</Button>
         </CanAccess>
@@ -247,7 +246,6 @@ export default function ReportsPage() {
                   >
                     📄 PDF
                   </Button>
-                  {/* 🎯 Кнопки редактирования и удаления только для admin, economist, master */}
                   <CanAccess roles={['admin', 'economist', 'master']}>
                     <Button variant="outline" size="sm" onClick={handleOpenEdit}>
                       ✏️ Редактировать
@@ -336,7 +334,7 @@ export default function ReportsPage() {
         </Card>
       </div>
 
-      {/* 🎯 Диалог создания отчета — только для admin, economist, master */}
+      {/* Диалог создания отчета */}
       <CanAccess roles={['admin', 'economist', 'master']}>
         <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
           <DialogContent className="max-w-lg">
@@ -412,7 +410,7 @@ export default function ReportsPage() {
         </Dialog>
       </CanAccess>
 
-      {/* 🎯 Диалог редактирования отчета — только для admin, economist, master */}
+      {/* Диалог редактирования отчета */}
       <CanAccess roles={['admin', 'economist', 'master']}>
         <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
           <DialogContent className="max-w-lg">
