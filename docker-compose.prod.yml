@@ -1,8 +1,9 @@
+# docker-compose.prod.yml
 version: '3.9'
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:15
     container_name: feoservice_postgres_prod
     restart: always
     environment:
@@ -21,12 +22,12 @@ services:
 
   backend:
     build:
-      context: ../backend
-      dockerfile: ../docker/backend.Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: feoservice_backend_prod
     restart: always
     env_file:
-      - ../.env
+      - .env
     expose:
       - "8000"
     volumes:
@@ -40,14 +41,14 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../docker/frontend.Dockerfile
+      context: ./frontend
+      dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     container_name: feoservice_frontend_prod
     restart: always
     env_file:
-      - ../.env
+      - .env
     expose:
       - "3000"
     depends_on:
@@ -57,15 +58,13 @@ services:
 
   nginx:
     image: nginx:alpine
-    container_name: feoservice_nginx
+    container_name: feoservice_nginx_prod
     restart: always
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - backend
       - frontend

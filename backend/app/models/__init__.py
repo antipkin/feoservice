@@ -52,3 +52,5 @@ from app.models.pricing_settings import ServicePricingSettings  # noqa: F401
 
 # Журнал аудита
 from app.models.audit_log import AuditLog  # noqa: F401
+
+from app.models.notification import Notification  # noqa: F401

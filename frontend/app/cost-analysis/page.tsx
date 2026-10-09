@@ -4,104 +4,90 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { costAnalysisApi, reportsApi, resourcesApi, ReportCostAnalysis, ImpactAnalysis, ReportData, ResourceData } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { reportsApi, costAnalysisApi, ReportListItemData, ReportCostAnalysis } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { CanAccess } from '@/lib/rbac';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import {
+  BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+} from 'recharts';
+
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+const formatMoney = (val: string | number) =>
+  new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(Number(val));
 
 export default function CostAnalysisPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
-
-  const [reports, setReports] = useState<ReportData[]>([]);
-  const [resources, setResources] = useState<ResourceData[]>([]);
+  const [reports, setReports] = useState<ReportListItemData[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<string>('');
   const [analysis, setAnalysis] = useState<ReportCostAnalysis | null>(null);
-  const [impact, setImpact] = useState<ImpactAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
-  const [priceChanges, setPriceChanges] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    if (!isLoading && (!user || !['admin', 'economist'].includes(user.role))) {
-      router.push('/');
-    }
+    if (!isLoading && !user) router.push('/');
   }, [user, isLoading, router]);
 
   useEffect(() => {
-    if (user && ['admin', 'economist'].includes(user.role)) {
-      const loadData = async () => {
-        try {
-          const [rpts, res] = await Promise.all([reportsApi.getAll(), resourcesApi.getAll()]);
-          setReports(rpts);
-          setResources(res);
-        } catch (e) { console.error('Ошибка загрузки:', e); }
-      };
-      loadData();
-    }
+    if (user) loadReports();
   }, [user]);
 
-  const handleAnalyze = async () => {
+  const loadReports = async () => {
+    try {
+      const data = await reportsApi.getAll();
+      setReports(data);
+    } catch (e) {
+      console.error('Ошибка:', e);
+    }
+  };
+
+  const loadAnalysis = async () => {
     if (!selectedReportId) return;
     setLoading(true);
     try {
-      const result = await costAnalysisApi.analyzeReport(parseInt(selectedReportId));
-      setAnalysis(result);
-      setImpact(null);
+      const data = await costAnalysisApi.analyzeReport(parseInt(selectedReportId));
+      setAnalysis(data);
     } catch (e: any) {
       alert(`Ошибка: ${e.message}`);
     }
     setLoading(false);
   };
 
-  const handleImpactAnalysis = async () => {
-    if (!selectedReportId || Object.keys(priceChanges).length === 0) {
-      alert('Выберите отчёт и измените хотя бы одну цену на ресурс');
-      return;
-    }
-    setLoading(true);
-    try {
-      const changes = Object.entries(priceChanges)
-        .filter(([_, price]) => price !== '')
-        .map(([resourceId, price]) => ({
-          resource_id: parseInt(resourceId),
-          new_price: parseFloat(price)
-        }));
+  useEffect(() => {
+    if (selectedReportId) loadAnalysis();
+  }, [selectedReportId]);
 
-      const result = await costAnalysisApi.analyzeImpact({
-        report_id: parseInt(selectedReportId),
-        price_changes: changes
-      });
-      setImpact(result);
-    } catch (e: any) {
-      alert(`Ошибка: ${e.message}`);
-    }
-    setLoading(false);
-  };
-
-  const formatMoney = (val: string) => new Number(val).toLocaleString('ru-RU', {
-    style: 'currency', currency: 'RUB', maximumFractionDigits: 2
-  });
-  const formatPercent = (val: string) => `${new Number(val).toFixed(1)}%`;
-
-  if (isLoading || !user || !['admin', 'economist'].includes(user.role)) {
-    return (
-      <div className="container mx-auto py-12 px-4 text-center">
-        <div className="text-lg text-muted-foreground">Проверка прав доступа...</div>
-      </div>
-    );
+  if (isLoading || !user) {
+    return <div className="container mx-auto py-12 text-center">Загрузка...</div>;
   }
+
+  // Данные для круговой диаграммы структуры затрат
+  const costStructureData = analysis ? [
+    { name: 'Материалы', value: Number(analysis.materials_total) },
+    { name: 'Труд', value: Number(analysis.labor_total) },
+    { name: 'Транспорт', value: Number(analysis.transport_total) },
+    { name: 'Энергия', value: Number(analysis.energy_total) },
+    { name: 'Прочее', value: Number(analysis.other_total) },
+  ].filter(d => d.value > 0) : [];
+
+  // Данные для графика по услугам
+  const servicesChartData = analysis ? analysis.services.map(s => ({
+    name: s.service_name.length > 25 ? s.service_name.substring(0, 25) + '...' : s.service_name,
+    amount: Number(s.total_amount),
+    materials: Number(s.materials_cost),
+    labor: Number(s.labor_cost),
+  })) : [];
 
   return (
     <div className="container mx-auto py-6 px-4 space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">📊 Анализ себестоимости</h1>
-        <p className="text-muted-foreground mt-1">
-          Детальная разбивка стоимости услуг по типам ресурсов и моделирование изменений
+        <h1 className="text-3xl font-bold tracking-tight">💰 Анализ себестоимости</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Детальная разбивка затрат по ресурсам и услугам
         </p>
       </div>
 
@@ -114,198 +100,196 @@ export default function CostAnalysisPage() {
           <div className="flex gap-4 items-end">
             <div className="flex-1 space-y-2">
               <Label>Отчёт</Label>
-              <Select value={selectedReportId} onValueChange={(v) => { setSelectedReportId(v); setAnalysis(null); setImpact(null); }}>
+              <Select value={selectedReportId} onValueChange={setSelectedReportId}>
                 <SelectTrigger><SelectValue placeholder="Выберите отчёт" /></SelectTrigger>
                 <SelectContent>
                   {reports.map(r => (
                     <SelectItem key={r.id} value={r.id.toString()}>
-                      {r.name || 'Без названия'} — {r.object_name}
+                      {r.name || 'Без названия'} — {r.object_name} ({formatMoney(r.total_amount)})
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <CanAccess roles={['admin', 'economist']}>
-              <Button onClick={handleAnalyze} disabled={loading || !selectedReportId}>
-                {loading ? 'Анализ...' : '🔍 Анализировать'}
-              </Button>
-            </CanAccess>
+            <Button onClick={loadAnalysis} disabled={!selectedReportId || loading}>
+              {loading ? 'Анализ...' : '🔍 Анализировать'}
+            </Button>
           </div>
         </CardContent>
       </Card>
 
       {analysis && (
         <>
-          {/* Итоги */}
+          {/* Общая информация */}
           <Card>
             <CardHeader>
-              <CardTitle>📈 Итоги по отчёту</CardTitle>
+              <CardTitle>{analysis.report_name}</CardTitle>
               <CardDescription>
-                {analysis.report_name} • {analysis.object_name} • {analysis.period}
+                {analysis.object_name} • {analysis.period}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-                <div className="p-4 rounded-lg bg-primary/10 border border-primary/20">
-                  <div className="text-sm text-muted-foreground">Общая стоимость</div>
-                  <div className="text-2xl font-bold">{formatMoney(analysis.total_amount)}</div>
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                <div className="p-3 bg-blue-50 rounded-lg text-center">
+                  <div className="text-xs text-muted-foreground">Всего</div>
+                  <div className="font-bold text-lg">{formatMoney(analysis.total_amount)}</div>
                 </div>
-                <div className="p-4 rounded-lg bg-blue-50 border border-blue-200">
-                  <div className="text-sm text-muted-foreground">📦 Материалы</div>
-                  <div className="text-xl font-bold">{formatMoney(analysis.materials_total)}</div>
+                <div className="p-3 bg-green-50 rounded-lg text-center">
+                  <div className="text-xs text-muted-foreground">Материалы</div>
+                  <div className="font-bold text-lg">{formatMoney(analysis.materials_total)}</div>
                 </div>
-                <div className="p-4 rounded-lg bg-green-50 border border-green-200">
-                  <div className="text-sm text-muted-foreground">👷 Труд</div>
-                  <div className="text-xl font-bold">{formatMoney(analysis.labor_total)}</div>
+                <div className="p-3 bg-purple-50 rounded-lg text-center">
+                  <div className="text-xs text-muted-foreground">Труд</div>
+                  <div className="font-bold text-lg">{formatMoney(analysis.labor_total)}</div>
                 </div>
-                <div className="p-4 rounded-lg bg-purple-50 border border-purple-200">
-                  <div className="text-sm text-muted-foreground">🚗 Транспорт</div>
-                  <div className="text-xl font-bold">{formatMoney(analysis.transport_total)}</div>
+                <div className="p-3 bg-amber-50 rounded-lg text-center">
+                  <div className="text-xs text-muted-foreground">Транспорт</div>
+                  <div className="font-bold text-lg">{formatMoney(analysis.transport_total)}</div>
                 </div>
-                <div className="p-4 rounded-lg bg-amber-50 border border-amber-200">
-                  <div className="text-sm text-muted-foreground">⚡ Энергия</div>
-                  <div className="text-xl font-bold">{formatMoney(analysis.energy_total)}</div>
+                <div className="p-3 bg-red-50 rounded-lg text-center">
+                  <div className="text-xs text-muted-foreground">Энергия</div>
+                  <div className="font-bold text-lg">{formatMoney(analysis.energy_total)}</div>
                 </div>
-                <div className="p-4 rounded-lg bg-gray-50 border border-gray-200">
-                  <div className="text-sm text-muted-foreground">📋 Прочее</div>
-                  <div className="text-xl font-bold">{formatMoney(analysis.other_total)}</div>
+                <div className="p-3 bg-gray-50 rounded-lg text-center">
+                  <div className="text-xs text-muted-foreground">Прочее</div>
+                  <div className="font-bold text-lg">{formatMoney(analysis.other_total)}</div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Вкладки */}
-          <Tabs defaultValue="services" className="space-y-4">
-            <TabsList>
-              <TabsTrigger value="services">По услугам</TabsTrigger>
-              <TabsTrigger value="impact">Моделирование изменений</TabsTrigger>
-            </TabsList>
-            <TabsContent value="services">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Детализация по услугам</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="rounded-md border overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Услуга</TableHead>
-                          <TableHead>Категория</TableHead>
-                          <TableHead className="text-right">Объём</TableHead>
-                          <TableHead className="text-right">Сумма</TableHead>
-                          <TableHead className="text-right">Материалы</TableHead>
-                          <TableHead className="text-right">Труд</TableHead>
-                          <TableHead className="text-right">Транспорт</TableHead>
-                          <TableHead className="text-right">Энергия</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {analysis.services.map(svc => (
-                          <TableRow key={svc.service_type_id}>
-                            <TableCell className="font-medium">{svc.service_name}</TableCell>
-                            <TableCell>
-                              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800">
-                                {svc.category_name || '—'}
-                              </span>
-                            </TableCell>
-                            <TableCell className="text-right">{new Number(svc.total_quantity).toLocaleString('ru-RU')} {svc.unit_symbol}</TableCell>
-                            <TableCell className="text-right font-semibold">{formatMoney(svc.total_amount)}</TableCell>
-                            <TableCell className="text-right text-blue-600">{formatMoney(svc.materials_cost)}</TableCell>
-                            <TableCell className="text-right text-green-600">{formatMoney(svc.labor_cost)}</TableCell>
-                            <TableCell className="text-right text-purple-600">{formatMoney(svc.transport_cost)}</TableCell>
-                            <TableCell className="text-right text-amber-600">{formatMoney(svc.energy_cost)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-            <TabsContent value="impact">
-              <Card>
-                <CardHeader>
-                  <CardTitle>🔧 Моделирование изменений цен на ресурсы</CardTitle>
-                  <CardDescription>
-                    Измените цены на ресурсы и посмотрите, как это повлияет на итоговую стоимость
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {resources.map(res => (
-                      <div key={res.id} className="space-y-2">
-                        <Label>{res.name} ({res.unit})</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          placeholder="Новая цена"
-                          value={priceChanges[res.id] || ''}
-                          onChange={(e) => setPriceChanges({...priceChanges, [res.id]: e.target.value})}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <CanAccess roles={['admin', 'economist']}>
-                    <Button onClick={handleImpactAnalysis} disabled={loading || Object.keys(priceChanges).length === 0}>
-                      {loading ? 'Расчёт...' : '🧮 Рассчитать влияние'}
-                    </Button>
-                  </CanAccess>
-                  {impact && (
-                    <div className="mt-6 space-y-4">
-                      <div className="p-4 rounded-lg bg-gradient-to-br from-primary/5 to-primary/10 border border-primary/20">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <div className="text-sm text-muted-foreground">Старая стоимость:</div>
-                            <div className="text-xl font-bold">{formatMoney(impact.total_old)}</div>
-                          </div>
-                          <div className="text-3xl">→</div>
-                          <div>
-                            <div className="text-sm text-muted-foreground">Новая стоимость:</div>
-                            <div className="text-xl font-bold">{formatMoney(impact.total_new)}</div>
-                          </div>
-                          <div>
-                            <div className="text-sm text-muted-foreground">Изменение:</div>
-                            <div className={`text-xl font-bold ${new Number(impact.total_change) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {formatMoney(impact.total_change)} ({formatPercent(impact.total_change_percent)})
-                            </div>
-                          </div>
+          {/* Графики */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Структура затрат */}
+            <Card>
+              <CardHeader>
+                <CardTitle>🥧 Структура затрат</CardTitle>
+                <CardDescription>Распределение по типам ресурсов</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={costStructureData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={100}
+                      label={(entry) => `${entry.name}: ${((entry.value / Number(analysis.total_amount)) * 100).toFixed(1)}%`}
+                    >
+                      {costStructureData.map((entry, idx) => (
+                        <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value: number) => formatMoney(value)} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            {/* Затраты по услугам */}
+            <Card>
+              <CardHeader>
+                <CardTitle>📊 Затраты по услугам</CardTitle>
+                <CardDescription>Топ-10 услуг по сумме затрат</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={servicesChartData.slice(0, 10)} layout="vertical">
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis type="number" />
+                    <YAxis dataKey="name" type="category" width={150} />
+                    <Tooltip formatter={(value: number) => formatMoney(value)} />
+                    <Legend />
+                    <Bar dataKey="materials" name="Материалы" stackId="a" fill="#10b981" />
+                    <Bar dataKey="labor" name="Труд" stackId="a" fill="#3b82f6" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Детализация по услугам */}
+          <Card>
+            <CardHeader>
+              <CardTitle>📋 Детализация по услугам</CardTitle>
+              <CardDescription>Разбивка затрат по каждой услуге</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {analysis.services.map((service, idx) => (
+                  <details key={idx} className="border rounded-lg">
+                    <summary className="p-3 cursor-pointer hover:bg-muted/50 flex items-center justify-between">
+                      <div>
+                        <div className="font-medium">{service.service_name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {service.category_name} • {service.total_quantity} {service.unit_symbol}
                         </div>
                       </div>
-                      <div className="rounded-md border">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Услуга</TableHead>
-                              <TableHead className="text-right">Старая цена/ед.</TableHead>
-                              <TableHead className="text-right">Новая цена/ед.</TableHead>
-                              <TableHead className="text-right">Изменение</TableHead>
-                              <TableHead className="text-right">Старая сумма</TableHead>
-                              <TableHead className="text-right">Новая сумма</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {impact.services_impact.map(svc => (
-                              <TableRow key={svc.service_type_id}>
-                                <TableCell className="font-medium">{svc.service_name}</TableCell>
-                                <TableCell className="text-right">{formatMoney(svc.old_price)}</TableCell>
-                                <TableCell className="text-right">{formatMoney(svc.new_price)}</TableCell>
-                                <TableCell className={`text-right font-semibold ${new Number(svc.price_change) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                  {formatMoney(svc.price_change)} ({formatPercent(svc.price_change_percent)})
-                                </TableCell>
-                                <TableCell className="text-right">{formatMoney(svc.total_amount_old)}</TableCell>
-                                <TableCell className="text-right font-semibold">{formatMoney(svc.total_amount_new)}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                      <div className="text-right">
+                        <div className="font-bold">{formatMoney(service.total_amount)}</div>
                       </div>
+                    </summary>
+                    <div className="p-3 bg-muted/30 border-t">
+                      <div className="grid grid-cols-5 gap-2 mb-3">
+                        <div className="text-center p-2 bg-green-50 rounded">
+                          <div className="text-xs">Материалы</div>
+                          <div className="font-semibold text-sm">{formatMoney(service.materials_cost)}</div>
+                        </div>
+                        <div className="text-center p-2 bg-blue-50 rounded">
+                          <div className="text-xs">Труд</div>
+                          <div className="font-semibold text-sm">{formatMoney(service.labor_cost)}</div>
+                        </div>
+                        <div className="text-center p-2 bg-amber-50 rounded">
+                          <div className="text-xs">Транспорт</div>
+                          <div className="font-semibold text-sm">{formatMoney(service.transport_cost)}</div>
+                        </div>
+                        <div className="text-center p-2 bg-red-50 rounded">
+                          <div className="text-xs">Энергия</div>
+                          <div className="font-semibold text-sm">{formatMoney(service.energy_cost)}</div>
+                        </div>
+                        <div className="text-center p-2 bg-gray-50 rounded">
+                          <div className="text-xs">Прочее</div>
+                          <div className="font-semibold text-sm">{formatMoney(service.other_cost)}</div>
+                        </div>
+                      </div>
+                      {service.resources.length > 0 && (
+                        <div className="mt-3">
+                          <div className="text-sm font-semibold mb-2">Использованные ресурсы:</div>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b">
+                                  <th className="text-left p-2">Ресурс</th>
+                                  <th className="text-left p-2">Тип</th>
+                                  <th className="text-right p-2">Кол-во</th>
+                                  <th className="text-right p-2">Цена</th>
+                                  <th className="text-right p-2">Сумма</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {service.resources.map((res, ridx) => (
+                                  <tr key={ridx} className="border-b hover:bg-muted/30">
+                                    <td className="p-2">{res.resource_name}</td>
+                                    <td className="p-2 text-muted-foreground">{res.resource_type}</td>
+                                    <td className="p-2 text-right">{Number(res.quantity).toFixed(2)} {res.unit}</td>
+                                    <td className="p-2 text-right">{formatMoney(res.price_per_unit)}</td>
+                                    <td className="p-2 text-right font-semibold">{formatMoney(res.total_amount)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+                  </details>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

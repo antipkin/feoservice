@@ -14,7 +14,7 @@ from app.models.facts import Act, ActItem, FactHeader, FactItem
 from app.models.services import ServiceType
 from app.models.objects import Object
 from app.models.user import User
-from app.models.enums import ActStatus, FactStatus, ACT_STATUS_LABELS, FACT_STATUS_LABELS
+from app.models.enums import ActStatus, ACT_STATUS_LABELS
 from app.schemas.act import ActCreate, ActResponse, ActListItem, ActItemResponse
 from app.schemas.status_transition import (
     StatusTransitionRequest,
@@ -29,10 +29,16 @@ from app.utils.status_helper import (
 from app.utils.export import export_act_to_pdf
 from app.core.security import require_authenticated, require_economist_or_higher
 from app.utils.audit_helper import log_action
+from app.services.notification_service import notify_status_change
 
 router = APIRouter(prefix="/acts", tags=["Акты выполненных работ"])
 
+
+# ============================================================
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: ГЕНЕРАЦИЯ НОМЕРА АКТА
+# ============================================================
 async def _generate_act_number(db: AsyncSession) -> str:
+    """Генерирует уникальный номер акта вида АКТ-YYYY-NNN."""
     year = date.today().year
     result = await db.execute(
         select(func.count(Act.id)).where(Act.act_number.like(f'АКТ-{year}-%'))
@@ -40,6 +46,10 @@ async def _generate_act_number(db: AsyncSession) -> str:
     count = result.scalar() or 0
     return f"АКТ-{year}-{str(count + 1).zfill(3)}"
 
+
+# ============================================================
+# СОЗДАНИЕ АКТА ИЗ ФАКТА
+# ============================================================
 @router.post("/from-fact/{fact_id}", response_model=ActResponse, status_code=status.HTTP_201_CREATED)
 async def create_act_from_fact(
     request: Request,
@@ -47,6 +57,7 @@ async def create_act_from_fact(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher)
 ):
+    """Создаёт акт на основе утверждённого или подписанного факта."""
     fact_result = await db.execute(
         select(FactHeader).options(selectinload(FactHeader.items)).where(FactHeader.id == fact_id)
     )
@@ -54,34 +65,38 @@ async def create_act_from_fact(
     if not fact:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
+    # 🎯 Проверка статуса факта: акт можно создать только из утверждённого/подписанного
     fact_status = fact.status.value if hasattr(fact.status, 'value') else str(fact.status).upper()
     if fact_status not in ['APPROVED', 'SIGNED']:
         raise HTTPException(
             status_code=400,
-            detail=f"Акт можно создать только из утверждённого или подписанного факта. Текущий статус: {fact_status}"
+            detail=f"Акт можно создать только из утверждённого или подписанного факта. "
+                   f"Текущий статус факта: {fact_status}"
         )
 
+    # Проверка: не создан ли уже акт для этого факта
     existing_act = await db.execute(select(Act).where(Act.fact_header_id == fact_id))
     if existing_act.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Акт для этого факта уже существует")
 
+    # Загружаем услуги для периодичности
     service_ids = [item.service_type_id for item in fact.items]
     services_result = await db.execute(select(ServiceType).where(ServiceType.id.in_(service_ids)))
     services_dict = {s.id: s for s in services_result.scalars().all()}
 
+    # Создаём акт в статусе DRAFT
     act_number = await _generate_act_number(db)
-    
-    # 🎯 ИСПРАВЛЕНО: статус теперь строго DRAFT (верхний регистр)
     act = Act(
         act_number=act_number,
         act_date=date.today(),
         fact_header_id=fact_id,
         total_amount=Decimal('0'),
-        status=ActStatus.DRAFT 
+        status=ActStatus.DRAFT
     )
     db.add(act)
     await db.flush()
 
+    # Копируем позиции из факта в акт
     total = Decimal('0')
     for fact_item in fact.items:
         service = services_dict.get(fact_item.service_type_id)
@@ -95,10 +110,11 @@ async def create_act_from_fact(
         )
         db.add(act_item)
         total += fact_item.actual_amount or Decimal('0')
-    
+
     act.total_amount = total
     await db.commit()
 
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ АКТА
     await log_action(
         db=db,
         user=current_user,
@@ -117,6 +133,10 @@ async def create_act_from_fact(
     result = await db.execute(select(Act).options(selectinload(Act.items)).where(Act.id == act.id))
     return result.scalar_one()
 
+
+# ============================================================
+# ПОЛУЧЕНИЕ СПИСКА АКТОВ
+# ============================================================
 @router.get("/", response_model=List[ActListItem])
 async def get_acts(
     object_id: Optional[int] = None,
@@ -125,6 +145,7 @@ async def get_acts(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_authenticated)
 ):
+    """Получить список актов с фильтрацией по объекту, году и статусу."""
     query = select(Act).join(FactHeader, Act.fact_header_id == FactHeader.id)
     if object_id:
         query = query.where(FactHeader.object_id == object_id)
@@ -140,18 +161,29 @@ async def get_acts(
     result = await db.execute(query)
     return result.scalars().all()
 
+
+# ============================================================
+# ПОЛУЧЕНИЕ АКТА ПО ID
+# ============================================================
 @router.get("/{act_id}", response_model=ActResponse)
 async def get_act(
     act_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_authenticated)
 ):
-    result = await db.execute(select(Act).options(selectinload(Act.items)).where(Act.id == act_id))
+    """Получить акт по ID с позициями."""
+    result = await db.execute(
+        select(Act).options(selectinload(Act.items)).where(Act.id == act_id)
+    )
     act = result.scalar_one_or_none()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
     return act
 
+
+# ============================================================
+# УДАЛЕНИЕ АКТА (только для черновиков)
+# ============================================================
 @router.delete("/{act_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_act(
     request: Request,
@@ -159,16 +191,20 @@ async def delete_act(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher)
 ):
+    """Удалить акт (только в статусе 'draft')."""
     result = await db.execute(select(Act).where(Act.id == act_id))
     act = result.scalar_one_or_none()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
 
+    # 🎯 Проверка статуса: удалять можно только черновик
     current_status = act.status.value if hasattr(act.status, 'value') else str(act.status).upper()
     if current_status not in ['DRAFT', 'CREATED']:
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя удалить акт в статусе '{ACT_STATUS_LABELS.get(ActStatus(current_status), current_status)}'."
+            detail=f"Нельзя удалить акт в статусе "
+                   f"'{ACT_STATUS_LABELS.get(ActStatus(current_status), current_status)}'. "
+                   f"Удаление доступно только для черновиков."
         )
 
     deleted_data = {
@@ -180,6 +216,7 @@ async def delete_act(
     await db.delete(act)
     await db.commit()
 
+    # 🎯 ЛОГИРОВАНИЕ УДАЛЕНИЯ АКТА
     await log_action(
         db=db,
         user=current_user,
@@ -191,6 +228,10 @@ async def delete_act(
     )
     return None
 
+
+# ============================================================
+# 🆕 WORKFLOW: СМЕНА СТАТУСА АКТА
+# ============================================================
 @router.post("/{act_id}/transition", response_model=StatusTransitionResponse)
 async def transition_act_status(
     request: Request,
@@ -199,16 +240,26 @@ async def transition_act_status(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_authenticated)
 ):
+    """
+    Переводит акт в новый статус с проверкой прав и матрицы переходов.
+
+    Доступные переходы:
+    - draft → submitted (master, economist, admin)
+    - submitted → draft (economist, admin) — возврат на доработку
+    - submitted → approved (economist, admin) — утверждение
+    - approved → signed (admin) — подписание
+    """
     result = await db.execute(select(Act).where(Act.id == act_id))
     act = result.scalar_one_or_none()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
 
     old_status = act.status.value if hasattr(act.status, 'value') else str(act.status).upper()
-    
-    # 🎯 ИСПРАВЛЕНО: принудительный верхний регистр
+
+    # 🎯 Приводим к верхнему регистру для единообразия
     new_status_upper = transition.new_status.upper()
 
+    # Проверяем переход и права пользователя
     validate_status_transition(
         current_status=old_status,
         new_status=new_status_upper,
@@ -216,10 +267,37 @@ async def transition_act_status(
         document_type="act"
     )
 
+    # Применяем новый статус
     act.status = ActStatus(new_status_upper)
     await db.commit()
     await db.refresh(act)
 
+    # 🎯 ТРИГГЕР УВЕДОМЛЕНИЙ
+    fact_result = await db.execute(
+        select(FactHeader).where(FactHeader.id == act.fact_header_id)
+    )
+    fact = fact_result.scalar_one_or_none()
+    obj_result = await db.execute(
+        select(Object).where(Object.id == (fact.object_id if fact else 0))
+    )
+    obj = obj_result.scalar_one_or_none()
+    document_name = f"Акт {act.act_number} ({obj.name if obj else 'Объект'})"
+
+    await notify_status_change(
+        db=db,
+        document_type="act",
+        document_id=act.id,
+        document_name=document_name,
+        old_status=old_status,
+        new_status=new_status_upper,
+        actor_id=current_user.id,
+        actor_name=current_user.username,
+        comment=transition.comment,
+        creator_id=fact.created_by if fact else None
+    )
+    await db.commit()  # Финальный коммит для сохранения уведомления
+
+    # 🎯 ЛОГИРОВАНИЕ СМЕНЫ СТАТУСА
     await log_action(
         db=db,
         user=current_user,
@@ -245,12 +323,17 @@ async def transition_act_status(
         message=f"Акт переведён в статус '{ACT_STATUS_LABELS.get(ActStatus(new_status_upper))}'"
     )
 
+
+# ============================================================
+# 🆕 ПОЛУЧЕНИЕ ДОСТУПНЫХ ПЕРЕХОДОВ ДЛЯ АКТА
+# ============================================================
 @router.get("/{act_id}/available-transitions", response_model=AvailableTransitionsResponse)
 async def get_act_available_transitions(
     act_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_authenticated)
 ):
+    """Возвращает список доступных переходов для акта с учётом прав пользователя."""
     result = await db.execute(select(Act).where(Act.id == act_id))
     act = result.scalar_one_or_none()
     if not act:
@@ -267,25 +350,36 @@ async def get_act_available_transitions(
         can_edit=can_edit_document(current_status, "act")
     )
 
+
+# ============================================================
+# ЭКСПОРТ АКТА В PDF
+# ============================================================
 @router.get("/{act_id}/export/pdf")
 async def export_act_pdf(
     act_id: int,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_authenticated)
 ):
-    result = await db.execute(select(Act).options(selectinload(Act.items)).where(Act.id == act_id))
+    """Экспорт акта в PDF."""
+    result = await db.execute(
+        select(Act).options(selectinload(Act.items)).where(Act.id == act_id)
+    )
     act = result.scalar_one_or_none()
     if not act:
         raise HTTPException(status_code=404, detail="Акт не найден")
 
-    fact_result = await db.execute(select(FactHeader).where(FactHeader.id == act.fact_header_id))
+    fact_result = await db.execute(
+        select(FactHeader).where(FactHeader.id == act.fact_header_id)
+    )
     fact = fact_result.scalar_one()
     obj_result = await db.execute(select(Object).where(Object.id == fact.object_id))
     obj = obj_result.scalar_one()
 
     service_ids = [item.service_type_id for item in act.items]
     services_result = await db.execute(
-        select(ServiceType).options(selectinload(ServiceType.unit)).where(ServiceType.id.in_(service_ids))
+        select(ServiceType).options(selectinload(ServiceType.unit)).where(
+            ServiceType.id.in_(service_ids)
+        )
     )
     services_dict = {s.id: s for s in services_result.scalars().all()}
 
@@ -301,6 +395,7 @@ async def export_act_pdf(
         "total_amount": str(act.total_amount),
         "status": ACT_STATUS_LABELS.get(ActStatus(act_status_val), act_status_val)
     }
+
     items_data = []
     for item in act.items:
         service = services_dict.get(item.service_type_id)

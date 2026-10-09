@@ -34,6 +34,7 @@ from app.utils.status_helper import (
 from app.utils.export import export_fact_to_excel, export_fact_to_pdf
 from app.core.security import require_authenticated, require_economist_or_higher
 from app.utils.audit_helper import log_action
+from app.services.notification_service import notify_status_change
 
 router = APIRouter(prefix="/facts", tags=["Учёт факта"])
 
@@ -41,7 +42,6 @@ router = APIRouter(prefix="/facts", tags=["Учёт факта"])
 # ============================================================
 # FACT HEADERS (Заголовки фактов)
 # ============================================================
-
 @router.post("/", response_model=FactHeaderResponse, status_code=status.HTTP_201_CREATED)
 async def create_fact_header(
     request: Request,
@@ -49,6 +49,7 @@ async def create_fact_header(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher)
 ):
+    """Создать новый факт (в статусе 'DRAFT')."""
     existing = await db.execute(
         select(FactHeader).where(
             FactHeader.object_id == fact_in.object_id,
@@ -57,34 +58,46 @@ async def create_fact_header(
         )
     )
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail=f"Факт для этого объекта на {fact_in.month}/{fact_in.year} уже существует")
-    
-    # 🎯 ИСПРАВЛЕНО: принудительно задаем верхний регистр DRAFT
+        raise HTTPException(
+            status_code=400,
+            detail=f"Факт для этого объекта на {fact_in.month}/{fact_in.year} уже существует"
+        )
+
+    # 🎯 Принудительно задаём статус DRAFT и сохраняем создателя
     fact_data = fact_in.model_dump(exclude={'status'})
     fact_data['status'] = 'DRAFT'
-    
+    fact_data['created_by'] = current_user.id
+
     db_fact = FactHeader(**fact_data)
     db.add(db_fact)
     await db.commit()
     await db.refresh(db_fact)
-    
+
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ ФАКТА
     await log_action(
         db=db,
         user=current_user,
         action="CREATE",
         resource_type="FACT",
         resource_id=db_fact.id,
-        new_values={"object_id": db_fact.object_id, "year": db_fact.year, "month": db_fact.month, "status": "DRAFT"},
+        new_values={
+            "object_id": db_fact.object_id,
+            "year": db_fact.year,
+            "month": db_fact.month,
+            "status": "DRAFT",
+            "created_by": current_user.id
+        },
         ip_address=request.client.host if request.client else None
     )
     return db_fact
+
 
 @router.get("/", response_model=List[FactHeaderResponse])
 async def get_fact_headers(
     object_id: Optional[int] = None,
     year: Optional[int] = None,
     month: Optional[int] = None,
-    status_filter: Optional[str] = None,  # 🆕 Фильтр по статусу
+    status_filter: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_authenticated)
 ):
@@ -98,7 +111,8 @@ async def get_fact_headers(
         query = query.where(FactHeader.month == month)
     if status_filter:
         try:
-            status_enum = FactStatus(status_filter)
+            # 🎯 Приводим к верхнему регистру для единообразия
+            status_enum = FactStatus(status_filter.upper())
             query = query.where(FactHeader.status == status_enum)
         except ValueError:
             pass
@@ -128,18 +142,19 @@ async def update_fact_header(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher)
 ):
-    """Обновить факт (только в статусе 'draft')."""
+    """Обновить факт (только в статусе 'DRAFT')."""
     result = await db.execute(select(FactHeader).where(FactHeader.id == fact_id))
     fact = result.scalar_one_or_none()
     if not fact:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
-    # 🎯 ПРОВЕРКА: редактирование только в статусе draft
-    current_status = fact.status.value if hasattr(fact.status, 'value') else fact.status
+    # 🎯 ПРОВЕРКА СТАТУСА: редактирование только в статусе DRAFT
+    current_status = fact.status.value if hasattr(fact.status, 'value') else str(fact.status).upper()
     if not can_edit_document(current_status, "fact"):
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя редактировать факт в статусе '{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'. "
+            detail=f"Нельзя редактировать факт в статусе "
+                   f"'{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'. "
                    f"Редактирование доступно только в статусе 'Черновик'."
         )
 
@@ -148,7 +163,6 @@ async def update_fact_header(
         "month": fact.month,
         "status": current_status
     }
-
     for field, value in fact_in.model_dump(exclude_unset=True).items():
         setattr(fact, field, value)
 
@@ -166,7 +180,6 @@ async def update_fact_header(
         new_values=fact_in.model_dump(exclude_unset=True),
         ip_address=request.client.host if request.client else None
     )
-
     return fact
 
 
@@ -177,17 +190,19 @@ async def delete_fact_header(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher)
 ):
-    """Удалить факт (только в статусе 'draft')."""
+    """Удалить факт (только в статусе 'DRAFT')."""
     result = await db.execute(select(FactHeader).where(FactHeader.id == fact_id))
     fact = result.scalar_one_or_none()
     if not fact:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
-    current_status = fact.status.value if hasattr(fact.status, 'value') else fact.status
-    if current_status != FactStatus.DRAFT.value:
+    # 🎯 ПРОВЕРКА СТАТУСА: удалять можно только черновик
+    current_status = fact.status.value if hasattr(fact.status, 'value') else str(fact.status).upper()
+    if current_status != "DRAFT":
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя удалить факт в статусе '{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'. "
+            detail=f"Нельзя удалить факт в статусе "
+                   f"'{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'. "
                    f"Удаление доступно только для черновиков."
         )
 
@@ -211,7 +226,6 @@ async def delete_fact_header(
         old_values=deleted_data,
         ip_address=request.client.host if request.client else None
     )
-
     return None
 
 
@@ -228,7 +242,7 @@ async def transition_fact_status(
 ):
     """
     Переводит факт в новый статус с проверкой прав и матрицы переходов.
-    
+
     Доступные переходы:
     - draft → submitted (master, economist, admin)
     - submitted → draft (economist, admin) — возврат на доработку
@@ -240,20 +254,46 @@ async def transition_fact_status(
     if not fact:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
-    old_status = fact.status.value if hasattr(fact.status, 'value') else fact.status
+    old_status = fact.status.value if hasattr(fact.status, 'value') else str(fact.status).upper()
 
-    # 🎯 Проверяем переход и права пользователя
+    # 🎯 Приводим к верхнему регистру для единообразия
+    new_status_upper = transition.new_status.upper()
+
+    # Проверяем переход и права пользователя
     validate_status_transition(
         current_status=old_status,
-        new_status=transition.new_status,
+        new_status=new_status_upper,
         user=current_user,
         document_type="fact"
     )
 
     # Применяем новый статус
-    fact.status = FactStatus(transition.new_status)
+    fact.status = FactStatus(new_status_upper)
     await db.commit()
     await db.refresh(fact)
+
+    # 🎯 ТРИГГЕР УВЕДОМЛЕНИЙ
+    obj_result = await db.execute(select(Object).where(Object.id == fact.object_id))
+    obj = obj_result.scalar_one_or_none()
+    month_names = [
+        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+    ]
+    document_name = f"{obj.name if obj else 'Объект'} — {month_names[fact.month - 1]} {fact.year}"
+
+    await notify_status_change(
+        db=db,
+        document_type="fact",
+        document_id=fact.id,
+        document_name=document_name,
+        old_status=old_status,
+        new_status=new_status_upper,
+        actor_id=current_user.id,
+        actor_name=current_user.username,
+        comment=transition.comment,
+        creator_id=fact.created_by  # 🎯 Передаём создателя для уведомлений
+    )
+    await db.commit()  # Финальный коммит для сохранения уведомления
 
     # 🎯 ЛОГИРОВАНИЕ СМЕНЫ СТАТУСА
     await log_action(
@@ -264,22 +304,21 @@ async def transition_fact_status(
         resource_id=fact_id,
         old_values={"status": old_status},
         new_values={
-            "status": transition.new_status,
+            "status": new_status_upper,
             "comment": transition.comment,
         },
         ip_address=request.client.host if request.client else None
     )
 
-    # Получаем доступные переходы для нового статуса
-    available = get_available_transitions(transition.new_status, current_user.role, "fact")
+    available = get_available_transitions(new_status_upper, current_user.role, "fact")
 
     return StatusTransitionResponse(
         id=fact.id,
         old_status=old_status,
-        new_status=transition.new_status,
-        status_label=FACT_STATUS_LABELS.get(FactStatus(transition.new_status), transition.new_status),
+        new_status=new_status_upper,
+        status_label=FACT_STATUS_LABELS.get(FactStatus(new_status_upper), new_status_upper),
         available_transitions=available,
-        message=f"Факт переведён в статус '{FACT_STATUS_LABELS.get(FactStatus(transition.new_status))}'"
+        message=f"Факт переведён в статус '{FACT_STATUS_LABELS.get(FactStatus(new_status_upper))}'"
     )
 
 
@@ -295,7 +334,7 @@ async def get_fact_available_transitions(
     if not fact:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
-    current_status = fact.status.value if hasattr(fact.status, 'value') else fact.status
+    current_status = fact.status.value if hasattr(fact.status, 'value') else str(fact.status).upper()
     available = get_available_transitions(current_status, current_user.role, "fact")
 
     return AvailableTransitionsResponse(
@@ -321,17 +360,19 @@ async def copy_plan_to_fact(
     current_user: User = Depends(require_economist_or_higher)
 ):
     """Скопировать позиции плана в факт (только для черновика)."""
-    fact = await db.execute(select(FactHeader).where(FactHeader.id == fact_id))
-    fact_obj = fact.scalar_one_or_none()
+    fact_obj = (await db.execute(
+        select(FactHeader).where(FactHeader.id == fact_id)
+    )).scalar_one_or_none()
     if not fact_obj:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = fact_obj.status.value if hasattr(fact_obj.status, 'value') else fact_obj.status
-    if current_status != FactStatus.DRAFT.value:
+    current_status = fact_obj.status.value if hasattr(fact_obj.status, 'value') else str(fact_obj.status).upper()
+    if current_status != "DRAFT":
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя копировать данные в факт в статусе '{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'. "
+            detail=f"Нельзя копировать данные в факт в статусе "
+                   f"'{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'. "
                    f"Копирование доступно только для черновиков."
         )
 
@@ -385,7 +426,6 @@ async def copy_plan_to_fact(
         },
         ip_address=request.client.host if request.client else None
     )
-
     return created_facts
 
 
@@ -401,17 +441,19 @@ async def add_fact_item(
     current_user: User = Depends(require_economist_or_higher)
 ):
     """Добавить позицию в факт (только для черновика)."""
-    fact = await db.execute(select(FactHeader).where(FactHeader.id == fact_id))
-    fact_obj = fact.scalar_one_or_none()
+    fact_obj = (await db.execute(
+        select(FactHeader).where(FactHeader.id == fact_id)
+    )).scalar_one_or_none()
     if not fact_obj:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = fact_obj.status.value if hasattr(fact_obj.status, 'value') else fact_obj.status
-    if current_status != FactStatus.DRAFT.value:
+    current_status = fact_obj.status.value if hasattr(fact_obj.status, 'value') else str(fact_obj.status).upper()
+    if current_status != "DRAFT":
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя добавлять позиции в факт в статусе '{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'."
+            detail=f"Нельзя добавлять позиции в факт в статусе "
+                   f"'{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'."
         )
 
     actual_amount = item_in.actual_quantity * item_in.unit_price
@@ -439,7 +481,6 @@ async def add_fact_item(
         },
         ip_address=request.client.host if request.client else None
     )
-
     return db_item
 
 
@@ -450,7 +491,9 @@ async def get_fact_items(
     current_user: User = Depends(require_authenticated)
 ):
     """Получить все позиции факта."""
-    result = await db.execute(select(FactItem).where(FactItem.fact_header_id == fact_id))
+    result = await db.execute(
+        select(FactItem).where(FactItem.fact_header_id == fact_id)
+    )
     return result.scalars().all()
 
 
@@ -462,28 +505,29 @@ async def update_fact_item(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher)
 ):
-    """Обновить позицию факта (только если факт в статусе 'draft')."""
+    """Обновить позицию факта (только если факт в статусе 'DRAFT')."""
     result = await db.execute(select(FactItem).where(FactItem.id == item_id))
     fact_item = result.scalar_one_or_none()
     if not fact_item:
         raise HTTPException(status_code=404, detail="Позиция факта не найдена")
 
-    header = await db.execute(select(FactHeader).where(FactHeader.id == fact_item.fact_header_id))
-    header_obj = header.scalar_one()
+    header_obj = (await db.execute(
+        select(FactHeader).where(FactHeader.id == fact_item.fact_header_id)
+    )).scalar_one()
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = header_obj.status.value if hasattr(header_obj.status, 'value') else header_obj.status
-    if current_status != FactStatus.DRAFT.value:
+    current_status = header_obj.status.value if hasattr(header_obj.status, 'value') else str(header_obj.status).upper()
+    if current_status != "DRAFT":
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя изменять позиции факта в статусе '{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'."
+            detail=f"Нельзя изменять позиции факта в статусе "
+                   f"'{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'."
         )
 
     old_values = {
         "actual_quantity": str(fact_item.actual_quantity),
         "unit_price": str(fact_item.unit_price)
     }
-
     update_data = item_in.model_dump(exclude_unset=True)
     if "actual_quantity" in update_data or "unit_price" in update_data:
         qty = update_data.get("actual_quantity", fact_item.actual_quantity)
@@ -507,7 +551,6 @@ async def update_fact_item(
         new_values=update_data,
         ip_address=request.client.host if request.client else None
     )
-
     return fact_item
 
 
@@ -518,21 +561,23 @@ async def delete_fact_item(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher)
 ):
-    """Удалить позицию факта (только если факт в статусе 'draft')."""
+    """Удалить позицию факта (только если факт в статусе 'DRAFT')."""
     result = await db.execute(select(FactItem).where(FactItem.id == item_id))
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Позиция факта не найдена")
 
-    header = await db.execute(select(FactHeader).where(FactHeader.id == item.fact_header_id))
-    header_obj = header.scalar_one()
+    header_obj = (await db.execute(
+        select(FactHeader).where(FactHeader.id == item.fact_header_id)
+    )).scalar_one()
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = header_obj.status.value if hasattr(header_obj.status, 'value') else header_obj.status
-    if current_status != FactStatus.DRAFT.value:
+    current_status = header_obj.status.value if hasattr(header_obj.status, 'value') else str(header_obj.status).upper()
+    if current_status != "DRAFT":
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя удалять позиции факта в статусе '{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'."
+            detail=f"Нельзя удалять позиции факта в статусе "
+                   f"'{FACT_STATUS_LABELS.get(FactStatus(current_status), current_status)}'."
         )
 
     deleted_data = {
@@ -553,7 +598,6 @@ async def delete_fact_item(
         old_values=deleted_data,
         ip_address=request.client.host if request.client else None
     )
-
     return None
 
 
@@ -567,8 +611,9 @@ async def get_plan_fact_comparison(
     current_user: User = Depends(require_authenticated)
 ):
     """Получить данные для таблицы план-факт."""
-    fact = await db.execute(select(FactHeader).where(FactHeader.id == fact_id))
-    fact_obj = fact.scalar_one_or_none()
+    fact_obj = (await db.execute(
+        select(FactHeader).where(FactHeader.id == fact_id)
+    )).scalar_one_or_none()
     if not fact_obj:
         raise HTTPException(status_code=404, detail="Факт не найден")
 
@@ -671,8 +716,10 @@ async def export_fact_excel(
     fact_data = {"month": fact_obj.month, "year": fact_obj.year}
 
     file_buffer = export_fact_to_excel(fact_data, comparison_data, obj_data.name)
-    month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-                   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+    month_names = [
+        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+    ]
     raw_filename = f"fact_{obj_data.name}_{month_names[fact_obj.month - 1]}_{fact_obj.year}.xlsx"
     encoded_filename = urllib.parse.quote(raw_filename)
 
@@ -703,8 +750,10 @@ async def export_fact_pdf(
     fact_data = {"month": fact_obj.month, "year": fact_obj.year}
 
     file_buffer = export_fact_to_pdf(fact_data, comparison_data, obj_data.name)
-    month_names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-                   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+    month_names = [
+        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+    ]
     raw_filename = f"fact_{obj_data.name}_{month_names[fact_obj.month - 1]}_{fact_obj.year}.pdf"
     encoded_filename = urllib.parse.quote(raw_filename)
 

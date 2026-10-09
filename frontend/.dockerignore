@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.git
+.gitignore
+*.md
+Dockerfile
+docker-compose*.yml
+coverage
+.nyc_output

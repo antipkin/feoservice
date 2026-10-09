@@ -5,7 +5,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1
 
 export async function fetchAPI(endpoint: string, options: RequestInit = {}) {
   const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-  
+
   logger.info(`API Request: ${options.method || 'GET'} ${endpoint}`, {
     url: `${API_URL}${endpoint}`,
     hasToken: !!token
@@ -35,12 +35,18 @@ export async function fetchAPI(endpoint: string, options: RequestInit = {}) {
   return res.json();
 }
 
+// ============================================================
+// AUTH API
+// ============================================================
 export const authApi = {
   login: (login: string, password: string) =>
     fetchAPI('/auth/login', { method: 'POST', body: JSON.stringify({ login, password }) }),
   getMe: () => fetchAPI('/auth/me'),
 };
 
+// ============================================================
+// USERS API
+// ============================================================
 export const usersApi = {
   getAll: () => fetchAPI('/users'),
   create: (data: any) => fetchAPI('/users', { method: 'POST', body: JSON.stringify(data) }),
@@ -49,6 +55,9 @@ export const usersApi = {
   getStats: () => fetchAPI('/users/stats/summary'),
 };
 
+// ============================================================
+// OBJECTS API
+// ============================================================
 export const objectsApi = {
   getAll: () => fetchAPI('/objects'),
   create: (data: any) => fetchAPI('/objects', { method: 'POST', body: JSON.stringify(data) }),
@@ -56,6 +65,9 @@ export const objectsApi = {
   delete: (id: number) => fetchAPI(`/objects/${id}`, { method: 'DELETE' }),
 };
 
+// ============================================================
+// UNITS API
+// ============================================================
 export const unitsApi = {
   getAll: () => fetchAPI('/units'),
   create: (data: any) => fetchAPI('/units', { method: 'POST', body: JSON.stringify(data) }),
@@ -63,6 +75,9 @@ export const unitsApi = {
   delete: (id: number) => fetchAPI(`/units/${id}`, { method: 'DELETE' }),
 };
 
+// ============================================================
+// SERVICE CATEGORIES API
+// ============================================================
 export const serviceCategoriesApi = {
   getAll: () => fetchAPI('/service-categories'),
   create: (data: any) => fetchAPI('/service-categories', { method: 'POST', body: JSON.stringify(data) }),
@@ -72,6 +87,9 @@ export const serviceCategoriesApi = {
   moveDown: (id: number) => fetchAPI(`/service-categories/${id}/move-down`, { method: 'POST' }),
 };
 
+// ============================================================
+// SERVICES API
+// ============================================================
 export const servicesApi = {
   getAll: () => fetchAPI('/services/types'),
   create: (data: any) => fetchAPI('/services/types', { method: 'POST', body: JSON.stringify(data) }),
@@ -94,6 +112,9 @@ export const servicesApi = {
   },
 };
 
+// ============================================================
+// RESOURCES API
+// ============================================================
 export const resourcesApi = {
   getAll: (resourceType?: string) => {
     const params = resourceType ? `?resource_type=${resourceType}` : '';
@@ -120,6 +141,9 @@ export const resourcesApi = {
   deleteNorm: (id: number) => fetchAPI(`/resources/norms/${id}`, { method: 'DELETE' }),
 };
 
+// ============================================================
+// PRICING SETTINGS API
+// ============================================================
 export const pricingSettingsApi = {
   getAll: () => fetchAPI('/pricing-settings'),
   create: (data: any) => fetchAPI('/pricing-settings', { method: 'POST', body: JSON.stringify(data) }),
@@ -128,11 +152,20 @@ export const pricingSettingsApi = {
   calculate: (data: any) => fetchAPI('/pricing-settings/calculate', { method: 'POST', body: JSON.stringify(data) }),
 };
 
+// ============================================================
+// COST ANALYSIS API (объявлен ОДИН раз)
+// ============================================================
 export const costAnalysisApi = {
   analyzeReport: (reportId: number) => fetchAPI(`/cost-analysis/reports/${reportId}`),
-  analyzeImpact: (data: any) => fetchAPI('/cost-analysis/impact', { method: 'POST', body: JSON.stringify(data) }),
+  analyzeImpact: (data: any) => fetchAPI('/cost-analysis/impact', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  }),
 };
 
+// ============================================================
+// PLANS API
+// ============================================================
 export const plansApi = {
   getAll: (objectId?: number, year?: number) => {
     const params = new URLSearchParams();
@@ -140,7 +173,7 @@ export const plansApi = {
     if (year) params.append('year', year.toString());
     return fetchAPI(`/plans?${params.toString()}`);
   },
-  get: (id: number) => fetchAPI(`/plans/${id}`), // 🎯 ДОБАВЛЕНО: метод get
+  get: (id: number) => fetchAPI(`/plans/${id}`),
   create: (data: any) => fetchAPI('/plans', { method: 'POST', body: JSON.stringify(data) }),
   delete: (planId: number) => fetchAPI(`/plans/${planId}`, { method: 'DELETE' }),
   copy: (planId: number, data: any) => fetchAPI(`/plans/${planId}/copy`, { method: 'POST', body: JSON.stringify(data) }),
@@ -155,6 +188,9 @@ export const plansApi = {
   recalculateRates: (planId: number) => fetchAPI(`/plans/${planId}/recalculate-rates`, { method: 'POST' }),
 };
 
+// ============================================================
+// FACTS API
+// ============================================================
 export const factsApi = {
   getAll: (objectId?: number, year?: number, month?: number) => {
     const params = new URLSearchParams();
@@ -163,7 +199,7 @@ export const factsApi = {
     if (month) params.append('month', month.toString());
     return fetchAPI(`/facts?${params.toString()}`);
   },
-  get: (factId: number) => fetchAPI(`/facts/${factId}`), // 🎯 ДОБАВЛЕНО: метод get
+  get: (factId: number) => fetchAPI(`/facts/${factId}`),
   create: (data: any) => fetchAPI('/facts', { method: 'POST', body: JSON.stringify(data) }),
   update: (factId: number, data: any) => fetchAPI(`/facts/${factId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (factId: number) => fetchAPI(`/facts/${factId}`, { method: 'DELETE' }),
@@ -178,6 +214,9 @@ export const factsApi = {
   exportPdf: (factId: number) => `${API_URL}/facts/${factId}/export/pdf`,
 };
 
+// ============================================================
+// ACTS API
+// ============================================================
 export const actsApi = {
   getAll: (objectId?: number, year?: number) => {
     const params = new URLSearchParams();
@@ -185,12 +224,15 @@ export const actsApi = {
     if (year) params.append('year', year.toString());
     return fetchAPI(`/acts?${params.toString()}`);
   },
-  get: (actId: number) => fetchAPI(`/acts/${actId}`), // 🎯 ДОБАВЛЕНО: метод get
+  get: (actId: number) => fetchAPI(`/acts/${actId}`),
   createFromFact: (factId: number) => fetchAPI(`/acts/from-fact/${factId}`, { method: 'POST' }),
   delete: (actId: number) => fetchAPI(`/acts/${actId}`, { method: 'DELETE' }),
   exportPdf: (actId: number) => `${API_URL}/acts/${actId}/export/pdf`,
 };
 
+// ============================================================
+// REPORTS API
+// ============================================================
 export const reportsApi = {
   getAll: (objectId?: number, year?: number) => {
     const params = new URLSearchParams();
@@ -206,6 +248,9 @@ export const reportsApi = {
   exportPdf: (reportId: number) => `${API_URL}/reports/${reportId}/export/pdf`,
 };
 
+// ============================================================
+// DASHBOARD API
+// ============================================================
 export const dashboardApi = {
   getStats: (year?: number) => {
     const params = year ? `?year=${year}` : '';
@@ -213,6 +258,9 @@ export const dashboardApi = {
   },
 };
 
+// ============================================================
+// IMPORT API
+// ============================================================
 export const importApi = {
   preview: async (file: File, objectId: number, startMonth: number, startYear: number) => {
     const formData = new FormData();
@@ -231,7 +279,26 @@ export const importApi = {
 };
 
 // ============================================================
-// ТИПЫ (оставлены без изменений, они корректны)
+// NOTIFICATIONS API
+// ============================================================
+export const notificationsApi = {
+  getAll: (params?: { unread_only?: boolean; type?: string; limit?: number }) => {
+    const searchParams = new URLSearchParams();
+    if (params?.unread_only) searchParams.set('unread_only', 'true');
+    if (params?.type) searchParams.set('type_filter', params.type);
+    if (params?.limit) searchParams.set('limit', params.limit.toString());
+    const query = searchParams.toString();
+    return fetchAPI(`/notifications${query ? `?${query}` : ''}`);
+  },
+  getUnreadCount: () => fetchAPI('/notifications/unread-count'),
+  getStats: () => fetchAPI('/notifications/stats'),
+  markAsRead: (id: number) => fetchAPI(`/notifications/${id}/read`, { method: 'PATCH' }),
+  markAllAsRead: () => fetchAPI('/notifications/read-all', { method: 'POST' }),
+  delete: (id: number) => fetchAPI(`/notifications/${id}`, { method: 'DELETE' }),
+};
+
+// ============================================================
+// ТИПЫ (каждый объявлен ОДИН раз)
 // ============================================================
 export interface UserResponse {
   id: number;
@@ -423,6 +490,20 @@ export interface ReportData {
   items: ReportItemData[];
 }
 
+export interface ReportListItemData {
+  id: number;
+  object_id: number;
+  object_name: string;
+  start_month: number;
+  start_year: number;
+  end_month: number;
+  end_year: number;
+  name?: string;
+  status: string;
+  total_amount: string;
+  created_at: string;
+}
+
 export interface KPICard {
   title: string;
   value: string;
@@ -466,6 +547,8 @@ export interface DashboardData {
   top_deviations: TopDeviation[];
   category_distribution: CategoryDistribution[];
   alerts: Alert[];
+  status_counts?: Record<string, number>;
+  year?: number;
 }
 
 export interface ImportedServiceRow {
@@ -606,4 +689,24 @@ export interface ImpactAnalysis {
   total_change: string;
   total_change_percent: string;
   services_impact: ServiceImpact[];
+}
+
+export interface NotificationData {
+  id: number;
+  user_id: number;
+  type: string;
+  title: string;
+  message: string;
+  resource_type: string | null;
+  resource_id: number | null;
+  is_read: boolean;
+  read_at: string | null;
+  extra_data: any;
+  created_at: string;
+}
+
+export interface NotificationStats {
+  total: number;
+  unread: number;
+  by_type: Record<string, number>;
 }

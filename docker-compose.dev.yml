@@ -1,9 +1,8 @@
-version: '3.9'
-
+# docker-compose.dev.yml
 services:
   postgres:
-    image: postgres:16
-    container_name: feoservice_postgres
+    image: postgres:15
+    container_name: feoservice_postgres_dev
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-feoservice}
@@ -21,29 +20,31 @@ services:
 
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: feoservice_pgadmin
+    container_name: feoservice_pgadmin_dev
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-maksim.antipkin@gmail.com}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@local.dev}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
       - "5050:80"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   backend:
     build:
-      context: ../backend
-      dockerfile: ../docker/backend.Dockerfile
-    container_name: feoservice_backend
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: feoservice_backend_dev
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "8000:8000"
     volumes:
-      - ../backend:/app
+      - ./backend:/app
+      - /app/venv
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,20 +52,22 @@ services:
 
   frontend:
     build:
-      context: ../frontend
-      dockerfile: ../docker/frontend.Dockerfile
-    container_name: feoservice_frontend
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: deps
+    container_name: feoservice_frontend_dev
     restart: unless-stopped
     env_file:
-      - ../.env
+      - .env
     ports:
       - "3000:3000"
     volumes:
-      - ../frontend:/app
+      - ./frontend:/app
       - /app/node_modules
       - /app/.next
     depends_on:
       - backend
+    command: npm run dev
 
 volumes:
   postgres_data_dev:

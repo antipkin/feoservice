@@ -1,41 +1,44 @@
 # backend/app/core/config.py
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from typing import List
 import json
+from pathlib import Path
+
+# 🎯 Надежно определяем путь к папке backend/, где лежит файл .env
+# config.py находится в backend/app/core/, поэтому поднимаемся на 3 уровня вверх
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_FILE_PATH = BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
-    # Database
-    DB_HOST: str = "localhost"
-    DB_PORT: int = 5432
-    DB_USER: str = "feoservice"
-    DB_PASSWORD: str = "feoservice_secret"
-    DB_NAME: str = "feoservice"
+    # 🎯 Без значений по умолчанию! Pydantic обязан взять их из .env
+    DB_HOST: str
+    DB_PORT: int
+    DB_USER: str
+    DB_PASSWORD: str
+    DB_NAME: str
 
-    # Auth
-    SECRET_KEY: str = "dev-secret-key-change-in-production"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    SECRET_KEY: str
+    ALGORITHM: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int
 
-    # CORS
-    BACKEND_CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    BACKEND_CORS_ORIGINS: List[str]
 
-    # 🎯 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: умный парсер для CORS origins
+    # 🎯 Умный парсер для CORS (поддерживает и JSON-массив, и строку через запятую)
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
-            # Пробуем распарсить как JSON-массив: '["a","b"]'
-            if v.strip().startswith("["):
+            v_stripped = v.strip()
+            if v_stripped.startswith("["):
                 try:
-                    parsed = json.loads(v)
+                    parsed = json.loads(v_stripped)
                     if isinstance(parsed, list):
                         return parsed
                 except json.JSONDecodeError:
                     pass
-            # Если не JSON — разделяем по запятым: "a,b,c"
-            return [s.strip().strip('"').strip("'") for s in v.split(",") if s.strip()]
+            return [s.strip().strip('"').strip("'") for s in v_stripped.split(",") if s.strip()]
         return v
 
     @property
@@ -52,9 +55,14 @@ class Settings(BaseSettings):
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
         )
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    # 🎯 Явная конфигурация загрузки из .env
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE_PATH),
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore"  # Игнорируем лишние переменные в .env, чтобы приложение не падало
+    )
 
 
+# Создаем глобальный экземпляр настроек
 settings = Settings()

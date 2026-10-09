@@ -7,6 +7,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/button';
 import { useState } from 'react';
 import { canAccess, UserRole } from '@/lib/rbac';
+import { NotificationBell } from '@/components/notification-bell';
 
 const NAV_ITEMS = [
   { href: '/', label: '🏠 Главная', roles: ['admin', 'economist', 'master', 'viewer'] as UserRole[] },
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { href: '/users', label: '👥 Пользователи', roles: ['admin'] as UserRole[] },
   { href: '/help', label: '📚 Помощь', roles: ['admin', 'economist', 'master', 'viewer'] as UserRole[] },
   { href: '/audit', label: '🛡️ Аудит', roles: ['admin'] as UserRole[] },
+  { href: '/notifications', label: '🔔 Уведомления', roles: ['admin', 'economist', 'master', 'viewer'] as UserRole[]},
 ];
 
 export default function AppHeader() {

@@ -90,3 +90,40 @@ PLAN_STATUS_LABELS = {
     PlanStatus.APPROVED: "✅ Утверждён",
     PlanStatus.ARCHIVED: "📦 В архиве",
 }
+
+class NotificationType(str, Enum):
+    """Типы уведомлений."""
+    # Workflow
+    STATUS_CHANGE = "status_change"           # Смена статуса документа
+    APPROVAL_REQUEST = "approval_request"     # Запрос на согласование
+    APPROVED = "approved"                     # Документ утверждён
+    REJECTED = "rejected"                     # Документ возвращён на доработку
+    SIGNED = "signed"                         # Документ подписан
+    
+    # Создание документов
+    NEW_FACT = "new_fact"                     # Создан новый факт
+    NEW_ACT = "new_act"                       # Создан новый акт
+    NEW_PLAN = "new_plan"                     # Создан новый план
+    
+    # Аналитика
+    DEVIATION_ALERT = "deviation_alert"       # Критическое отклонение план-факт
+    
+    # Системные
+    SYSTEM = "system"                         # Системное уведомление
+
+
+# 🎯 Матрица: кто получает уведомления при событиях
+# Формат: {событие: [роли получателей]}
+NOTIFICATION_RECIPIENTS = {
+    # При переводе в "На согласовании" — economist и admin
+    "submitted": ["economist", "admin"],
+    # При утверждении — создатель документа + admin
+    "approved": ["creator", "admin"],
+    # При возврате в черновик — создатель
+    "rejected": ["creator"],
+    # При подписании — все участники
+    "signed": ["creator", "admin", "economist"],
+}
+
+# 🎯 Порог отклонения для алерта (в %)
+DEVIATION_ALERT_THRESHOLD = 20.0

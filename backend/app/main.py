@@ -7,6 +7,7 @@ from app.routers import (
     dashboard, units, service_categories, resources,
     pricing_settings, cost_analysis, auth, users, audit
 )
+from app.routers import notifications
 
 app = FastAPI(
     title="ДомСервис API",
@@ -39,6 +40,8 @@ app.include_router(acts.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
+app.include_router(notifications.router, prefix="/api/v1")
+
 
 @app.get("/")
 async def root():

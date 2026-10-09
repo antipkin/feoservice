@@ -3,7 +3,7 @@ import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, func, and_, or_
+from sqlalchemy import select, delete, func, or_
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from decimal import Decimal
@@ -34,6 +34,7 @@ from app.utils.status_helper import (
     can_edit_document,
     get_available_transitions
 )
+from app.services.notification_service import notify_status_change
 
 router = APIRouter(prefix="/plans", tags=["Планирование"])
 
@@ -152,19 +153,21 @@ async def create_plan(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher),
 ):
+    """Создать новый план (в статусе 'DRAFT')."""
     obj = await db.execute(select(Object).where(Object.id == plan_in.object_id))
     if not obj.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Объект не найден")
-    
-    # 🎯 ИСПРАВЛЕНО: принудительно задаем верхний регистр DRAFT
+
+    # 🎯 Принудительно задаём статус DRAFT (верхний регистр)
     plan_data = plan_in.model_dump(exclude={'status'})
     plan_data['status'] = 'DRAFT'
-    
+
     db_plan = PlanHeader(**plan_data)
     db.add(db_plan)
     await db.commit()
     await db.refresh(db_plan)
-    
+
+    # 🎯 ЛОГИРОВАНИЕ СОЗДАНИЯ ПЛАНА
     await log_action(
         db=db,
         user=current_user,
@@ -200,7 +203,8 @@ async def get_plans(
         query = query.where(PlanHeader.start_year == year)
     if status_filter:
         try:
-            status_enum = PlanStatus(status_filter)
+            # 🎯 Приводим к верхнему регистру для единообразия
+            status_enum = PlanStatus(status_filter.upper())
             query = query.where(PlanHeader.status == status_enum)
         except ValueError:
             pass
@@ -229,18 +233,19 @@ async def delete_plan(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_economist_or_higher),
 ):
-    """Удалить план (только в статусе 'draft')."""
+    """Удалить план (только в статусе 'DRAFT')."""
     result = await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))
     plan = result.scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = plan.status.value if hasattr(plan.status, 'value') else plan.status
+    current_status = plan.status.value if hasattr(plan.status, 'value') else str(plan.status).upper()
     if not can_edit_document(current_status, "plan"):
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя удалить план в статусе '{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'. "
+            detail=f"Нельзя удалить план в статусе "
+                   f"'{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'. "
                    f"Удаление доступно только для черновиков."
         )
 
@@ -266,7 +271,6 @@ async def delete_plan(
         old_values=deleted_data,
         ip_address=request.client.host if request.client else None
     )
-
     return None
 
 
@@ -295,20 +299,42 @@ async def transition_plan_status(
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
 
-    old_status = plan.status.value if hasattr(plan.status, 'value') else plan.status
+    old_status = plan.status.value if hasattr(plan.status, 'value') else str(plan.status).upper()
 
-    # 🎯 Проверяем переход и права пользователя
+    # 🎯 Приводим к верхнему регистру для единообразия
+    new_status_upper = transition.new_status.upper()
+
+    # Проверяем переход и права пользователя
     validate_status_transition(
         current_status=old_status,
-        new_status=transition.new_status,
+        new_status=new_status_upper,
         user=current_user,
         document_type="plan"
     )
 
     # Применяем новый статус
-    plan.status = PlanStatus(transition.new_status)
+    plan.status = PlanStatus(new_status_upper)
     await db.commit()
     await db.refresh(plan)
+
+    # 🎯 ТРИГГЕР УВЕДОМЛЕНИЙ
+    obj_result = await db.execute(select(Object).where(Object.id == plan.object_id))
+    obj = obj_result.scalar_one_or_none()
+    document_name = f"{plan.name} ({obj.name if obj else 'Объект'})"
+
+    await notify_status_change(
+        db=db,
+        document_type="plan",
+        document_id=plan.id,
+        document_name=document_name,
+        old_status=old_status,
+        new_status=new_status_upper,
+        actor_id=current_user.id,
+        actor_name=current_user.username,
+        comment=transition.comment,
+        creator_id=None  # 🎯 В модели PlanHeader нет поля created_by
+    )
+    await db.commit()  # Финальный коммит для сохранения уведомления
 
     # 🎯 ЛОГИРОВАНИЕ СМЕНЫ СТАТУСА
     await log_action(
@@ -319,21 +345,21 @@ async def transition_plan_status(
         resource_id=plan_id,
         old_values={"status": old_status},
         new_values={
-            "status": transition.new_status,
+            "status": new_status_upper,
             "comment": transition.comment,
         },
         ip_address=request.client.host if request.client else None
     )
 
-    available = get_available_transitions(transition.new_status, current_user.role, "plan")
+    available = get_available_transitions(new_status_upper, current_user.role, "plan")
 
     return StatusTransitionResponse(
         id=plan.id,
         old_status=old_status,
-        new_status=transition.new_status,
-        status_label=PLAN_STATUS_LABELS.get(PlanStatus(transition.new_status), transition.new_status),
+        new_status=new_status_upper,
+        status_label=PLAN_STATUS_LABELS.get(PlanStatus(new_status_upper), new_status_upper),
         available_transitions=available,
-        message=f"План переведён в статус '{PLAN_STATUS_LABELS.get(PlanStatus(transition.new_status))}'"
+        message=f"План переведён в статус '{PLAN_STATUS_LABELS.get(PlanStatus(new_status_upper))}'"
     )
 
 
@@ -349,7 +375,7 @@ async def get_plan_available_transitions(
     if not plan:
         raise HTTPException(status_code=404, detail="План не найден")
 
-    current_status = plan.status.value if hasattr(plan.status, 'value') else plan.status
+    current_status = plan.status.value if hasattr(plan.status, 'value') else str(plan.status).upper()
     available = get_available_transitions(current_status, current_user.role, "plan")
 
     return AvailableTransitionsResponse(
@@ -487,7 +513,6 @@ async def copy_plan(
         },
         ip_address=request.client.host if request.client else None
     )
-
     return new_plan
 
 
@@ -519,7 +544,6 @@ async def get_service_rates_for_plan(
             "year": y,
             "unit_price": str(rate.price_per_unit) if rate else "0"
         })
-
     return rates_data
 
 
@@ -540,11 +564,12 @@ async def add_plan_item(
         raise HTTPException(status_code=404, detail="План не найден")
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = plan.status.value if hasattr(plan.status, 'value') else plan.status
+    current_status = plan.status.value if hasattr(plan.status, 'value') else str(plan.status).upper()
     if not can_edit_document(current_status, "plan"):
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя изменять план в статусе '{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
+            detail=f"Нельзя изменять план в статусе "
+                   f"'{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
         )
 
     total_quantity = Decimal('0')
@@ -600,7 +625,6 @@ async def add_plan_item(
         },
         ip_address=request.client.host if request.client else None
     )
-
     return _build_item_response(result.scalar_one())
 
 
@@ -619,11 +643,12 @@ async def update_plan_item(
         raise HTTPException(status_code=404, detail="План не найден")
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = plan.status.value if hasattr(plan.status, 'value') else plan.status
+    current_status = plan.status.value if hasattr(plan.status, 'value') else str(plan.status).upper()
     if not can_edit_document(current_status, "plan"):
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя изменять план в статусе '{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
+            detail=f"Нельзя изменять план в статусе "
+                   f"'{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
         )
 
     db_item = (await db.execute(select(PlanItem).where(PlanItem.id == item_id))).scalar_one_or_none()
@@ -687,7 +712,6 @@ async def update_plan_item(
         },
         ip_address=request.client.host if request.client else None
     )
-
     return _build_item_response(result.scalar_one())
 
 
@@ -705,11 +729,12 @@ async def delete_plan_item(
         raise HTTPException(status_code=404, detail="План не найден")
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = plan.status.value if hasattr(plan.status, 'value') else plan.status
+    current_status = plan.status.value if hasattr(plan.status, 'value') else str(plan.status).upper()
     if not can_edit_document(current_status, "plan"):
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя изменять план в статусе '{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
+            detail=f"Нельзя изменять план в статусе "
+                   f"'{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
         )
 
     item = (await db.execute(
@@ -738,7 +763,6 @@ async def delete_plan_item(
         old_values=deleted_data,
         ip_address=request.client.host if request.client else None
     )
-
     return None
 
 
@@ -755,6 +779,9 @@ async def get_plan_items(
     return [_build_item_response(item) for item in items]
 
 
+# ============================================================
+# РАСЧЁТ ТАРИФА
+# ============================================================
 @router.get("/{plan_id}/tariff", response_model=TariffCalculationResponse)
 async def calculate_tariff(
     plan_id: int,
@@ -818,11 +845,12 @@ async def recalculate_plan_rates(
         raise HTTPException(status_code=404, detail="План не найден")
 
     # 🎯 ПРОВЕРКА СТАТУСА
-    current_status = plan.status.value if hasattr(plan.status, 'value') else plan.status
+    current_status = plan.status.value if hasattr(plan.status, 'value') else str(plan.status).upper()
     if not can_edit_document(current_status, "plan"):
         raise HTTPException(
             status_code=400,
-            detail=f"Нельзя пересчитать план в статусе '{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
+            detail=f"Нельзя пересчитать план в статусе "
+                   f"'{PLAN_STATUS_LABELS.get(PlanStatus(current_status), current_status)}'."
         )
 
     items = (await db.execute(
@@ -855,7 +883,6 @@ async def recalculate_plan_rates(
         new_values={"action": "recalculate_rates", "plan_name": plan.name},
         ip_address=request.client.host if request.client else None
     )
-
     return (await db.execute(select(PlanHeader).where(PlanHeader.id == plan_id))).scalar_one()
 
 
@@ -874,12 +901,15 @@ async def export_plan_excel(
         raise HTTPException(status_code=404, detail="План не найден")
 
     obj_data = (await db.execute(select(Object).where(Object.id == plan_obj.object_id))).scalar_one()
+
     plan_items = (await db.execute(
         select(PlanItem).options(selectinload(PlanItem.monthly)).where(PlanItem.plan_header_id == plan_id)
     )).scalars().all()
+
     services_dict = {s.id: s for s in (await db.execute(
         select(ServiceType).options(selectinload(ServiceType.category), selectinload(ServiceType.unit))
     )).scalars().all()}
+
     categories = [{"id": c.id, "name": c.name} for c in (await db.execute(
         select(ServiceCategory).order_by(ServiceCategory.sort_order)
     )).scalars().all()]
@@ -894,7 +924,15 @@ async def export_plan_excel(
             "total_quantity": str(item.total_quantity),
             "unit_price": str(item.total_amount / item.total_quantity if item.total_quantity > 0 else 0),
             "total_amount": str(item.total_amount),
-            "monthly": [{"month": m.month, "year": m.year, "quantity": str(m.quantity), "unit_price": str(m.unit_price)} for m in item.monthly]
+            "monthly": [
+                {
+                    "month": m.month,
+                    "year": m.year,
+                    "quantity": str(m.quantity),
+                    "unit_price": str(m.unit_price)
+                }
+                for m in item.monthly
+            ]
         })
 
     total_services = (await db.execute(
@@ -909,9 +947,20 @@ async def export_plan_excel(
     divisor = (obj_data.spaces_count or Decimal('1')) if obj_data.tariff_base == "spaces" else (obj_data.area_sqm or Decimal('1'))
 
     file_buffer = export_plan_to_excel(
-        {"name": plan_obj.name, "start_month": plan_obj.start_month, "start_year": plan_obj.start_year, "period_months": plan_obj.period_months},
-        items_data, categories,
-        {"object_name": obj_data.name, "tariff_unit": tariff_unit, "tariff_per_unit": str(round(grand_total / divisor if divisor > 0 else 0, 2)), "grand_total": str(grand_total)}
+        {
+            "name": plan_obj.name,
+            "start_month": plan_obj.start_month,
+            "start_year": plan_obj.start_year,
+            "period_months": plan_obj.period_months
+        },
+        items_data,
+        categories,
+        {
+            "object_name": obj_data.name,
+            "tariff_unit": tariff_unit,
+            "tariff_per_unit": str(round(grand_total / divisor if divisor > 0 else 0, 2)),
+            "grand_total": str(grand_total)
+        }
     )
 
     return StreamingResponse(
@@ -936,12 +985,15 @@ async def export_plan_pdf(
         raise HTTPException(status_code=404, detail="План не найден")
 
     obj_data = (await db.execute(select(Object).where(Object.id == plan_obj.object_id))).scalar_one()
+
     plan_items = (await db.execute(
         select(PlanItem).options(selectinload(PlanItem.monthly)).where(PlanItem.plan_header_id == plan_id)
     )).scalars().all()
+
     services_dict = {s.id: s for s in (await db.execute(
         select(ServiceType).options(selectinload(ServiceType.category), selectinload(ServiceType.unit))
     )).scalars().all()}
+
     categories = [{"id": c.id, "name": c.name} for c in (await db.execute(
         select(ServiceCategory).order_by(ServiceCategory.sort_order)
     )).scalars().all()]
@@ -956,7 +1008,15 @@ async def export_plan_pdf(
             "total_quantity": str(item.total_quantity),
             "unit_price": str(item.total_amount / item.total_quantity if item.total_quantity > 0 else 0),
             "total_amount": str(item.total_amount),
-            "monthly": [{"month": m.month, "year": m.year, "quantity": str(m.quantity), "unit_price": str(m.unit_price)} for m in item.monthly]
+            "monthly": [
+                {
+                    "month": m.month,
+                    "year": m.year,
+                    "quantity": str(m.quantity),
+                    "unit_price": str(m.unit_price)
+                }
+                for m in item.monthly
+            ]
         })
 
     total_services = (await db.execute(
@@ -971,9 +1031,20 @@ async def export_plan_pdf(
     divisor = (obj_data.spaces_count or Decimal('1')) if obj_data.tariff_base == "spaces" else (obj_data.area_sqm or Decimal('1'))
 
     file_buffer = export_plan_to_pdf(
-        {"name": plan_obj.name, "start_month": plan_obj.start_month, "start_year": plan_obj.start_year, "period_months": plan_obj.period_months},
-        items_data, categories,
-        {"object_name": obj_data.name, "tariff_unit": tariff_unit, "tariff_per_unit": str(round(grand_total / divisor if divisor > 0 else 0, 2)), "grand_total": str(grand_total)}
+        {
+            "name": plan_obj.name,
+            "start_month": plan_obj.start_month,
+            "start_year": plan_obj.start_year,
+            "period_months": plan_obj.period_months
+        },
+        items_data,
+        categories,
+        {
+            "object_name": obj_data.name,
+            "tariff_unit": tariff_unit,
+            "tariff_per_unit": str(round(grand_total / divisor if divisor > 0 else 0, 2)),
+            "grand_total": str(grand_total)
+        }
     )
 
     return StreamingResponse(
